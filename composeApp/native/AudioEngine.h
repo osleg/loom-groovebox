@@ -4,6 +4,8 @@
 #include <oboe/Oboe.h>
 #include "AudioEngineCore.h"
 #include <memory>
+#include <atomic>
+#include <mutex>
 #include <android/performance_hint.h>
 #include <time.h>
 
@@ -15,6 +17,12 @@ public:
     bool start();
     void stop();
     void refreshInputStreamState();
+    // Positive ID selects CAFA; 0 blocks output; -1 explicitly restores normal audio.
+    bool setCafaOutputDevice(int32_t deviceId);
+    int32_t getCafaOutputDevice();
+    void setCafaAudioEnabled(bool enabled);
+    bool isCafaAudioEnabled();
+    void onErrorBeforeClose(oboe::AudioStream *audioStream, oboe::Result result) override;
 
     AudioEngineCore& getCore() { return *mCore; }
 
@@ -27,6 +35,14 @@ public:
     int getAudioThreadTid() const { return mAudioThreadTid; }
 
 private:
+    bool startLocked();
+    void stopLocked();
+    bool cafaRouteMatches(oboe::AudioStream *stream) const;
+    std::mutex mStreamMutex; // Control calls only; never acquired by the data callback.
+    bool mStartRequested = false;
+    std::atomic<int32_t> mCafaDeviceId{-1};
+    std::atomic<bool> mCafaAudioEnabled{false};
+    std::atomic<oboe::AudioStream *> mCallbackOutput{nullptr};
     int mAudioThreadTid = -1;
     std::unique_ptr<AudioEngineCore> mCore;
     std::shared_ptr<oboe::AudioStream> mOutputStream;

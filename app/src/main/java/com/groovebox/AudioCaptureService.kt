@@ -1,5 +1,7 @@
 package com.groovebox
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.app.*
 import android.content.Context
 import android.content.Intent
@@ -56,6 +58,12 @@ class AudioCaptureService : Service() {
 
     private fun startCapture(resultData: Intent) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            Log.w("AudioCaptureService", "Audio capture requires microphone permission")
+            stopCapture()
+            stopSelf()
+            return
+        }
 
         val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         mediaProjection = projectionManager.getMediaProjection(Activity.RESULT_OK, resultData)
@@ -98,6 +106,11 @@ class AudioCaptureService : Service() {
                     }
                 }
             }
+        } catch (e: SecurityException) {
+            // Permission may be revoked after the explicit check above.
+            Log.w("AudioCaptureService", "Audio capture permission was revoked", e)
+            stopCapture()
+            stopSelf()
         } catch (e: Exception) {
             Log.e("AudioCaptureService", "Failed to start capture: ${e.message}")
         }

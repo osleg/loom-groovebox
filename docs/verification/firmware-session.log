@@ -1,0 +1,7 @@
+PASS: 20.4 s session, firmware service every 34 ms
+PASS: 20.4 s session, firmware service every 102 ms
+PASS: 20.4 s session, firmware service every 170 ms
+PASS: lost first HELLO recovers
+PASS: lost first HELLO ACK recovers
+PASS: return-path loss stops safely and a fresh session reconnects
+PASS: 1976 real Java/C mailbox checks

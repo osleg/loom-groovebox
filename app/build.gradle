@@ -6,17 +6,19 @@ plugins {
 android {
     namespace 'com.groovebox'
     compileSdk 35
+    buildToolsVersion "35.0.0"
+    ndkVersion "27.2.12479018"
 
     defaultConfig {
         def versionPropsFile = file('../version.properties')
         def versionProps = new Properties()
         versionProps.load(new FileInputStream(versionPropsFile))
 
-        applicationId "com.groovebox"
+        applicationId "com.groovebox.cafa"
         minSdk 26
         targetSdk 35
         versionCode versionProps['VERSION_CODE'].toInteger()
-        versionName versionProps['VERSION_NAME']
+        versionName versionProps['VERSION_NAME'] + '-cafa.1'
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -95,23 +97,18 @@ dependencies {
     debugImplementation 'androidx.compose.ui:ui-test-manifest'
 }
 
-task incrementVersion(type: Exec) {
-    workingDir '..'
-    commandLine 'python3', 'check_version.py', '--increment'
-}
-
-task checkVersion(type: Exec) {
-    workingDir '..'
-    commandLine 'python3', 'check_version.py'
-    mustRunAfter incrementVersion
-}
-
-// Hook it into the build process
-preBuild.dependsOn checkVersion
-
-// Auto-increment for Release builds
-android.applicationVariants.all { variant ->
-    if (variant.buildType.name == 'release') {
-        variant.preBuildProvider.get().dependsOn incrementVersion
+// Validate the tracked version without changing source files during a build.
+// Bump version.properties explicitly when preparing a release.
+tasks.register('checkVersion') {
+    def propsFile = rootProject.file('version.properties')
+    inputs.file(propsFile)
+    doLast {
+        def props = new Properties()
+        propsFile.withInputStream { props.load(it) }
+        if (!(props['VERSION_CODE'] ==~ /[1-9][0-9]*/) ||
+                !(props['VERSION_NAME'] ==~ /[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?/)) {
+            throw new GradleException('version.properties requires a positive VERSION_CODE and semantic VERSION_NAME')
+        }
     }
 }
+preBuild.dependsOn tasks.named('checkVersion')

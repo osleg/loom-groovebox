@@ -24,6 +24,21 @@ actual class MidiManager(
 
     private val registry = mutableMapOf<String, DeviceEntry>()
     private val pendingMessages = mutableListOf<ByteArray>()
+    // A selected CAFA endpoint belongs exclusively to its framed-session transport.
+    // Generic LED broadcasts, clock, queued traffic and raw MIDI must not share it.
+    @Volatile private var cafaReservedId: Int? = null
+    @Volatile private var closed = false
+
+    @Synchronized
+    fun reserveForCafa(deviceId: Int?) {
+        val old = cafaReservedId
+        cafaReservedId = deviceId
+        registry.values.firstOrNull { it.info.id == deviceId }?.let { removeDevice(it.info) }
+        pendingMessages.clear()
+        if (old != null && old != deviceId && !closed) {
+            midiManager.devices.firstOrNull { it.id == old }?.let { connectToDevice(it) }
+        }
+    }
 
     // --- LOOPBACK FILTERING ---
     private data class SentMessage(val data: ByteArray, val timestamp: Long) {
@@ -92,6 +107,7 @@ actual class MidiManager(
             ?: "Unknown"
 
     private fun connectToDevice(info: android.media.midi.MidiDeviceInfo) {
+        if (closed || info.id == cafaReservedId) return
         val id = stableId(info)
         synchronized(this) {
             if (registry.containsKey(id)) return
@@ -101,6 +117,7 @@ actual class MidiManager(
                 logToUi("Failed to open: ${deviceDisplayName(info)}")
                 return@openDevice
             }
+            if (closed || info.id == cafaReservedId) { device.close(); return@openDevice }
             // Ignore a duplicate open that raced with the registry update.
             synchronized(this@MidiManager) {
                 if (registry.containsKey(id)) {
@@ -248,7 +265,8 @@ actual class MidiManager(
         }
 
         if (registry.values.none { it.outgoing.isNotEmpty() }) {
-            pendingMessages.add(data.copyOf())
+            // Never replay stale notes/clock into a newly connected instrument.
+            if (cafaReservedId == null && pendingMessages.size < 128) pendingMessages.add(data.copyOf())
             return
         }
         registry.keys.toList().forEach { sendToDevice(it, data) }
@@ -285,6 +303,7 @@ actual class MidiManager(
 
     @Synchronized
     actual fun close() {
+        closed = true
         registry.values.forEach { entry ->
             runCatching { entry.incoming.forEach { it.close() } }
             runCatching { entry.outgoing.forEach { it.close() } }

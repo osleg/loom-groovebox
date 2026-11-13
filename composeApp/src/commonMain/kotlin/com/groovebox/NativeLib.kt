@@ -1,6 +1,12 @@
 package com.groovebox
 
 expect class NativeLib() {
+    /** CAFA-only route: positive Android device ID, 0 = disconnected/muted, -1 = normal audio. */
+    fun setCafaOutputDevice(deviceId: Int): Boolean
+    /** Verified actual running CAFA output device, or 0. */
+    fun getCafaOutputDevice(): Int
+    fun setCafaAudioEnabled(enabled: Boolean)
+    fun isCafaAudioEnabled(): Boolean
     fun init()
     fun start()
     fun stop()

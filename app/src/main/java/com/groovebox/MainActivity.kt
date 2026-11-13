@@ -117,6 +117,7 @@ import com.groovebox.ui.components.VerticalScrollbar
 
 
 class MainActivity : ComponentActivity() {
+    private var cafaConnection: com.groovebox.cafa.CafaConnection? = null
     private lateinit var performanceManager: AudioPerformanceManager
     private val nativeLib = NativeLib()
     private lateinit var midiManager: MidiManager
@@ -270,6 +271,7 @@ class MainActivity : ComponentActivity() {
                 }
                 withContext(Dispatchers.Main) { splashScreenStatus = "Initializing Audio Engine..." }
                 nativeLib.init()
+                com.groovebox.cafa.CafaConnection.applyInitialRoute(this@MainActivity, nativeLib)
                 nativeLib.setAppDataDir(filesDir.absolutePath)
                 
                 withContext(Dispatchers.Main) { splashScreenStatus = "Restoring Sample Paths..." }
@@ -326,6 +328,7 @@ class MainActivity : ComponentActivity() {
                 viewModel.attachMidiManager(midiManager)
                 empledManager = EmpledManager(midiManager)
                 empledManager.sendHandshake()
+                cafaConnection = com.groovebox.cafa.CafaConnection(this@MainActivity, nativeLib, viewModel, midiManager)
 
                 // KEEP STATE IN SYNC WITH VIEWMODEL
                 lifecycleScope.launch {
@@ -361,7 +364,12 @@ class MainActivity : ComponentActivity() {
                 GrooveboxTheme {
                     Box(modifier = Modifier.fillMaxSize()) {
                         if (isNativeInitialized) {
-                            MainScreen(performanceManager, empledManager, nativeLib, viewModel, midiManager, onRecordingSourceChange = ::handleRecordingSourceChange) { viewModel.onStateChange(it) }
+                            Column(Modifier.fillMaxSize()) {
+                                cafaConnection?.let { com.groovebox.cafa.CafaPanel(it) }
+                                Box(Modifier.weight(1f)) {
+                                    MainScreen(performanceManager, empledManager, nativeLib, viewModel, midiManager, onRecordingSourceChange = ::handleRecordingSourceChange) { viewModel.onStateChange(it) }
+                                }
+                            }
                             
                             // RETRY HANDSHAKE after UI load
                             LaunchedEffect(Unit) {
@@ -422,6 +430,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        cafaConnection?.close()
         stopLoopbackCapture()
         super.onDestroy()
         nativeLib.stop()

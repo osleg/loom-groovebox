@@ -1,6 +1,11 @@
 package com.groovebox
 
 actual class NativeLib {
+    // CAFA Android USB routing is unavailable on desktop; do not report a fake route.
+    actual fun setCafaOutputDevice(deviceId: Int): Boolean = false
+    actual fun getCafaOutputDevice(): Int = 0
+    actual fun setCafaAudioEnabled(enabled: Boolean) = Unit
+    actual fun isCafaAudioEnabled(): Boolean = false
     actual fun init() = nInit()
     actual fun start() = nStart()
     actual fun stop() = nStop()

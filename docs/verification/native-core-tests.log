@@ -1,0 +1,470 @@
+PASS forward visits step 1 on first cycle and wraps
+PASS reset restores the full forward first cycle
+PASS reverse visits final step on first cycle and wraps
+PASS reset preserves reverse direction
+PASS ping-pong reaches both boundaries without duplicate endpoints
+PASS reset restores ping-pong forward phase
+PASS jump mode holds initial step
+PASS jump mode selects and holds requested step
+PASS reset clears jump position
+PASS leaving jump mode resumes ordered traversal
+PASS skipped step is bypassed from the first cycle
+OK (0 failures)
+
+== Subtractive ==
+PASS  mod on a silent note does not leak into the sounding voice
+PASS  mod on note 60 changes the mix
+PASS  mod on note 67 changes the mix
+PASS  mod on 60 and mod on 67 produce different mixes (per-voice routing)
+PASS  clearAllVoiceMod snaps both voices back to the base render
+
+== FM ==
+PASS  mod on a silent note does not leak into the sounding voice
+PASS  mod on note 60 changes the mix
+PASS  mod on note 67 changes the mix
+PASS  mod on 60 and mod on 67 produce different mixes (per-voice routing)
+PASS  clearAllVoiceMod snaps both voices back to the base render
+
+== Wavetable ==
+PASS  mod on a silent note does not leak into the sounding voice
+PASS  mod on note 60 changes the mix
+PASS  mod on note 67 changes the mix
+PASS  mod on 60 and mod on 67 produce different mixes (per-voice routing)
+PASS  clearAllVoiceMod snaps both voices back to the base render
+
+== Sampler ==
+PASS  mod on a silent note does not leak into the sounding voice
+PASS  mod on note 60 changes the mix
+PASS  mod on note 67 changes the mix
+PASS  mod on 60 and mod on 67 produce different mixes (per-voice routing)
+PASS  clearAllVoiceMod snaps both voices back to the base render
+
+== Subtractive bend range ==
+     base=257.8 Hz bent=521.5 Hz ratio=2.023
+PASS  x=+1 with a 12 st range bends one octave up
+PASS  clearVoiceMod restores the unbent pitch
+
+== AudioEngineCore refcount ==
+ManualTrigger T0 Note=60 Vel=100
+     base=263.7 modded=521.5 still=527.3 released=263.7
+PASS  core applies the per-voice bend
+PASS  one endVoicePadMod keeps the mod (refcount > 0)
+PASS  the final endVoicePadMod releases the bend
+
+== AudioEngineCore per-track transpose ==
+ManualTrigger T0 Note=60 Vel=100
+     base=521.5 modded=1048.8 ratio=2.011
+PASS  per-voice mod resolves the track transpose to the sounding voice
+
+== Subtractive oscillator macros ==
+PASS  MorphX3 writes all three oscillator shape parameters
+PASS  FoldX3 writes all three fold parameters
+PASS  DriveX3 writes all three drive parameters
+PASS  macro modulation leaves the base fold parameters intact
+
+OK (0 failures)
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+
+Engine type 5 (four melodic tracks + four drum tracks)
+PASS 4/17/33/64-step melodic and all 16 drum-lane indices stay in range
+PASS all steps increment and wrap at exact lengths, including first cycle
+PASS selected drum-lane getter matches current rendered lane, without lag
+PASS every expected step visited and every track/lane loops at least twice
+PASS rendered stereo samples remain finite at 44.1 kHz
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=4, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T5: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T6: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T7: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+
+Engine type 6 (four melodic tracks + four drum tracks)
+PASS 4/17/33/64-step melodic and all 16 drum-lane indices stay in range
+PASS all steps increment and wrap at exact lengths, including first cycle
+PASS selected drum-lane getter matches current rendered lane, without lag
+PASS every expected step visited and every track/lane loops at least twice
+PASS rendered stereo samples remain finite at 44.1 kHz
+PASS all playheads initialize to zero before first render
+AudioEngineCore Stats: ActiveTracks=7, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T5: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T6: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T7: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=7, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=NO, SmVol=0.70, Engine=5, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T5: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T6: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T7: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+
+Selected-lane divergence: engine 5
+PASS all selected lane getters match actual current lane; invalid lane uses track
+PASS lane 1 skips independently and publishes a divergent playhead
+PASS out-of-range tracks return zero
+PASS all playheads initialize to zero before first render
+AudioEngineCore Stats: ActiveTracks=7, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T5: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T6: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T7: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+AudioEngineCore Stats: ActiveTracks=7, Voices=0, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.0000, MaxPeak=0.0000
+  T0: Active=NO, SmVol=0.70, Engine=6, GainRed=1.00
+  T1: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T4: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T5: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T6: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+  T7: Active=YES, SmVol=0.70, Engine=0, GainRed=1.00
+
+Selected-lane divergence: engine 6
+PASS all selected lane getters match actual current lane; invalid lane uses track
+PASS lane 1 skips independently and publishes a divergent playhead
+PASS out-of-range tracks return zero
+ManualTrigger T0 Note=48 Vel=100
+PASS track 0 MIDI pitch 48 produces finite nonzero audio
+ManualTrigger T1 Note=51 Vel=100
+PASS track 1 MIDI pitch 51 produces finite nonzero audio
+ManualTrigger T2 Note=54 Vel=100
+PASS track 2 MIDI pitch 54 produces finite nonzero audio
+ManualTrigger T3 Note=57 Vel=100
+VoiceCount DRIFT: reported=4 actual=1 — correcting
+AudioEngineCore Stats: ActiveTracks=4, Voices=1, MasterVol=0.80, SampleRate=44100.0, BlockPeak=0.2645, MaxPeak=0.2647
+  T0: Active=YES, SmVol=0.60, Engine=0, GainRed=1.00
+  T1: Active=YES, SmVol=0.60, Engine=0, GainRed=1.00
+  T2: Active=YES, SmVol=0.60, Engine=0, GainRed=1.00
+  T3: Active=YES, SmVol=0.60, Engine=0, GainRed=1.00
+  T4: Active=NO, SmVol=0.60, Engine=0, GainRed=1.00
+  T5: Active=NO, SmVol=0.60, Engine=0, GainRed=1.00
+  T6: Active=NO, SmVol=0.60, Engine=0, GainRed=1.00
+  T7: Active=NO, SmVol=0.60, Engine=0, GainRed=1.00
+PASS track 3 MIDI pitch 57 produces finite nonzero audio
+ManualTrigger T4 Note=60 Vel=100
+PASS track 4 MIDI pitch 60 produces finite nonzero audio
+ManualTrigger T5 Note=63 Vel=100
+PASS track 5 MIDI pitch 63 produces finite nonzero audio
+ManualTrigger T6 Note=66 Vel=100
+PASS track 6 MIDI pitch 66 produces finite nonzero audio
+ManualTrigger T7 Note=69 Vel=100
+PASS track 7 MIDI pitch 69 produces finite nonzero audio
+
+OK (0 failures)

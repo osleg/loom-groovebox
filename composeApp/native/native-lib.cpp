@@ -1135,3 +1135,23 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_groovebox_NativeLib_nSetTrackProbability(JNIEnv *env, jobject thiz, jint track_index, jfloat probability) {
     if (engine) engine->getCore().setTrackProbability(track_index, probability);
 }
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_groovebox_NativeLib_nSetCafaOutputDevice(JNIEnv *, jobject, jint deviceId) {
+  return engine && engine->setCafaOutputDevice(deviceId) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_groovebox_NativeLib_nGetCafaOutputDevice(JNIEnv *, jobject) {
+  return engine ? engine->getCafaOutputDevice() : 0;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_groovebox_NativeLib_nSetCafaAudioEnabled(JNIEnv *, jobject, jboolean enabled) {
+  if (engine) engine->setCafaAudioEnabled(enabled == JNI_TRUE);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_groovebox_NativeLib_nIsCafaAudioEnabled(JNIEnv *, jobject) {
+  return engine && engine->isCafaAudioEnabled() ? JNI_TRUE : JNI_FALSE;
+}

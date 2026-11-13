@@ -333,7 +333,7 @@ fun syncNativeState(state: GrooveboxState, nativeLib: NativeLib) {
             nativeLib.setParameter(trackIdx, pid, safeVal)
         }
         
-        nativeLib.setPatternLength(trackIdx, state.patternLength)
+        nativeLib.setPatternLength(trackIdx, t.patternLength.coerceIn(4, 64))
         
         // Sync Arp
         nativeLib.setArpConfig(

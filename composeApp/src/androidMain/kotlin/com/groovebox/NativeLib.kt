@@ -1,6 +1,14 @@
 package com.groovebox
 
 actual class NativeLib {
+    actual fun setCafaOutputDevice(deviceId: Int): Boolean = nSetCafaOutputDevice(deviceId)
+    actual fun getCafaOutputDevice(): Int = nGetCafaOutputDevice()
+    actual fun setCafaAudioEnabled(enabled: Boolean) = nSetCafaAudioEnabled(enabled)
+    private external fun nSetCafaOutputDevice(deviceId: Int): Boolean
+    private external fun nGetCafaOutputDevice(): Int
+    private external fun nSetCafaAudioEnabled(enabled: Boolean)
+    actual fun isCafaAudioEnabled(): Boolean = nIsCafaAudioEnabled()
+    private external fun nIsCafaAudioEnabled(): Boolean
     actual fun init() = nInit()
     actual fun start() = nStart()
     actual fun stop() = nStop()

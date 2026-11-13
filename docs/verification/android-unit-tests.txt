@@ -1,0 +1,5 @@
+com.groovebox.cafa.CafaSurfaceTest: 11 passed, 0 failures/errors/skipped
+com.groovebox.midi.MidiClockInTest: 6 passed, 0 failures/errors/skipped
+com.groovebox.utils.GridCycleTest: 3 passed, 0 failures/errors/skipped
+com.groovebox.midi.MidiClockOutTest: 4 passed, 0 failures/errors/skipped
+Total: 24 passed
