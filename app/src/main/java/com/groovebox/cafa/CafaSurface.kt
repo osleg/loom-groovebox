@@ -110,6 +110,12 @@ class CafaSurface(
         buttons = nextButtons; keys = nextKeys; lastSerial = serial
         if (initial) { first = false; pressed = 0; down = 0 }
         state() // Cancel pending gestures if the touchscreen changed track/page.
+        // Cancellation wins when a release and navigation share one hardware scan.
+        val familyButtons = (1 shl 0) or (1 shl 1) or (1 shl 2) or (1 shl 3) or
+            (1 shl 4) or (1 shl 5) or (1 shl 6) or (1 shl 8) or (1 shl 9)
+        if ((pressed and familyButtons) != 0 || (!initial &&
+            (Protocol.u14(payload, 8) != 8192 || (page == SEQ && Protocol.u14(payload, 10) != 8192))))
+            heldSteps.fill(null)
         for (k in 0..26) if ((up and (1L shl k)) != 0L) {
             if (heldNotes[k] >= 0) {
                 engine.noteOff(heldTracks[k], heldNotes[k]); heldNotes[k] = -1

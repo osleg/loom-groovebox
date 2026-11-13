@@ -12,12 +12,12 @@ single command on one line:
 
 copy /b Loom-CAFA-v4.apk.001+Loom-CAFA-v4.apk.002+Loom-CAFA-v4.apk.003 Loom-CAFA-v4.apk
 
-The result must be exactly 52,381,137 bytes. Check it with:
+The result must be exactly 52,437,040 bytes. Check it with:
 
 certutil -hashfile Loom-CAFA-v4.apk SHA256
 
 Expected SHA-256:
-b0d891205889042037b040aca2111fafd509614b9d6deba3a1524cbc0eaab2c7
+402e9a3cabaa7dc2a69c6d5824021f9cef9e3739ce535ac0ccd9f2af3bd03701
 
 Then transfer/install Loom-CAFA-v4.apk on Android. Do not install a .001/.002/.003
 part, and do not rename a single part to .apk.
@@ -41,12 +41,11 @@ IMPORTANT
 Full control guide: Loom-CAFA-v4-READ-FIRST.md, saved with the deliverables.
 Matching app source:
 https://github.com/osleg/loom-groovebox/tree/cafa/loom-v4-controls-20261113
-Verified app commit: e98cbbf4dd3eeb146d3ce42e71910f0db57e7a90
 
 Part sizes and SHA-256 (optional individual checks):
 Loom-CAFA-v4.apk.001: 18874368 bytes
-9e4c4d2759c0ccecab73c4afad352de5cbb97931a43a049b29baf0ef6ee643b6
+48406d352c2720d6a991e091c4942253468b6e6076ebdbb1fea9137abfcd54cc
 Loom-CAFA-v4.apk.002: 18874368 bytes
 5677f3954f30c2b7b5056b6b86366a25a0baf2cf736147ba6eaaab4965080119
-Loom-CAFA-v4.apk.003: 14632401 bytes
-a5abe5b24fff20b1e6b3aa3f9cdc76f32f74626d4d0b3c7d6a5f444e4bbc6bf9
+Loom-CAFA-v4.apk.003: 14688304 bytes
+9756a5227556b5c919401bb60a1188426218f9bccbf1112c83f6437fa15cddb9

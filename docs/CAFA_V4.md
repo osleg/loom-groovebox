@@ -77,7 +77,7 @@ Standalone native synthesis remains available when disconnected.
 
 ## Verification
 
-- Full Android build passed (109 tasks), including all **31 unit tests**.
+- Full Android build passed (109 tasks), including all **32 unit tests**.
 - Lint: **0 errors**, 32 existing warnings, 1 hint.
 - APK signature, alignment, separate identity and all four ABI/JNI checks pass.
 - Protocol/session: **17,083 assertions**.

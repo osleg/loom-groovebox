@@ -161,13 +161,10 @@ Warning: Unable to initialize metrics, ensure /home/agent/.android is writable, 
 > Task :app:dexBuilderDebug
 > Task :app:mergeProjectDexDebug
 > Task :app:packageDebug
-> Task :app:createDebugApkListingFileRedirect
+> Task :app:createDebugApkListingFileRedirect UP-TO-DATE
 > Task :app:assembleDebug
 > Task :app:lintAnalyzeDebug
-
-> Task :app:lintReportDebug
-Wrote HTML report to file:///workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/app/build/reports/lint-results-debug.html
-
+> Task :app:lintReportDebug UP-TO-DATE
 > Task :app:lintDebug
 
 [Incubating] Problems report is available at: file:///workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/build/reports/problems/problems-report.html
@@ -178,5 +175,5 @@ You can use '--warning-mode all' to show the individual deprecation warnings and
 
 For more on this, please refer to https://docs.gradle.org/8.13/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
 
-BUILD SUCCESSFUL in 45s
-109 actionable tasks: 26 executed, 83 up-to-date
+BUILD SUCCESSFUL in 50s
+109 actionable tasks: 24 executed, 85 up-to-date

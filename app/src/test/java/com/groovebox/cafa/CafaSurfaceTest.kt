@@ -167,6 +167,17 @@ class CafaSurfaceTest {
             r.input(); assertTrue(r.engine.steps.isEmpty())
         }
     }
+    @Test fun simultaneousNavigationAndReleaseCancelsRatherThanToggles() {
+        for(action in 0..2) {
+            val r=Rig(); r.baseline(); r.surface.choosePage(CafaSurface.SEQ); r.input(keys=1)
+            when(action) {
+                0 -> r.input(buttons=1 shl 2)
+                1 -> r.input(encoder=1,delta=1)
+                else -> r.input(encoder=2,delta=1)
+            }
+            assertTrue(r.engine.steps.isEmpty())
+        }
+    }
     @Test fun allLfosPreserveRoutingAndReflectPhoneEdits() {
         val r=Rig(); r.baseline(); r.input(buttons=1 shl 3)
         assertEquals(CafaSurface.LFO,r.surface.page)

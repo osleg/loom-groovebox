@@ -27,7 +27,6 @@ Verifying alignment of app/build/outputs/apk/debug/app-debug.apk (4)...
 15113639 classes6.dex (OK - compressed)
 15152743 classes7.dex (OK - compressed)
 15207910 classes8.dex (OK - compressed)
-15219151 classes9.dex (OK - compressed)
 15274986 lib/arm64-v8a/libc++_shared.so (OK - compressed)
 15725992 lib/arm64-v8a/libloom-native-core.so (OK - compressed)
 15962303 lib/arm64-v8a/liboboe.so (OK - compressed)
@@ -212,6 +211,7 @@ Verifying alignment of app/build/outputs/apk/debug/app-debug.apk (4)...
 52352051 kotlin/kotlin.kotlin_builtins (OK - compressed)
 52357369 kotlin/ranges/ranges.kotlin_builtins (OK - compressed)
 52358729 kotlin/reflect/reflect.kotlin_builtins (OK - compressed)
+52360037 classes9.dex (OK - compressed)
 Verification succesful
 package: name='com.groovebox.cafa.v4' versionCode='390' versionName='3.2.19-cafa.4' platformBuildVersionName='15' platformBuildVersionCode='35' compileSdkVersion='35' compileSdkVersionCodename='15'
 sdkVersion:'26'
@@ -346,4 +346,4 @@ locales: '--_--' 'af' 'am' 'ar' 'as' 'az' 'be' 'bg' 'bn' 'bs' 'ca' 'cs' 'da' 'de
 densities: '120' '160' '240' '320' '480' '640' '65534'
 native-code: 'arm64-v8a' 'armeabi-v7a' 'x86' 'x86_64'
 Verified fork identity, label, four native ABIs, CAFA JNI exports and no signing keystore.
-b0d891205889042037b040aca2111fafd509614b9d6deba3a1524cbc0eaab2c7  app/build/outputs/apk/debug/app-debug.apk
+402e9a3cabaa7dc2a69c6d5824021f9cef9e3739ce535ac0ccd9f2af3bd03701  app/build/outputs/apk/debug/app-debug.apk
