@@ -52,6 +52,11 @@ static inline float softLimit(float x) {
 }
 
 AudioEngineCore::AudioEngineCore() {
+  // UI/hardware can query playheads before the first transport render.
+  for (int t = 0; t < 8; ++t) {
+    mTrackCurrentStep[t].store(0);
+    for (int d = 0; d < 16; ++d) mTrackCurrentDrumStep[t][d].store(0);
+  }
   mSampleRate = 48000.0; // Default to common Android rate
   mBpm = 120.0f;
   mPatternLength = 64;
@@ -1451,10 +1456,11 @@ void AudioEngineCore::processCommands() {
       if (cmd.trackIndex >= 0 && cmd.trackIndex < (int)mTracks.size()) {
         int length = (cmd.data1 <= 0) ? 1 : (cmd.data1 > 64 ? 64 : cmd.data1);
         mTracks[cmd.trackIndex].patternLength = length;
-        int pages = (length + 15) / 16;
-        mTracks[cmd.trackIndex].sequencer.setConfiguration(pages, 16);
+        // A saved per-track length is exact, not rounded up to a 16-step bank.
+        // Banks are a UI window; rounding here changed 4/17/33-step projects on load.
+        mTracks[cmd.trackIndex].sequencer.setConfiguration(1, length);
         for (int d = 0; d < 16; ++d)
-          mTracks[cmd.trackIndex].drumSequencers[d].setConfiguration(pages, 16);
+          mTracks[cmd.trackIndex].drumSequencers[d].setConfiguration(1, length);
       }
       break;
     case AudioCommand::SET_STEP:
@@ -2125,9 +2131,6 @@ void AudioEngineCore::render(float *audioData, int32_t numFrames) {
 
             bool looped = track.sequencer.advance();
             mTrackCurrentStep[t].store(track.sequencer.getCurrentStepIndex());
-            for (int d = 0; d < 16; ++d) {
-              mTrackCurrentDrumStep[t][d].store(track.drumSequencers[d].getCurrentStepIndex());
-            }
 
             // Apply SWING: even steps are longer, odd steps are shorter
             // mSwing range is -0.23 to +0.23
@@ -2294,6 +2297,7 @@ void AudioEngineCore::render(float *audioData, int32_t numFrames) {
               for (int d = 0; d < 16; ++d) {
                 track.drumSequencers[d].advance();
                 int drumStep = track.drumSequencers[d].getCurrentStepIndex();
+                mTrackCurrentDrumStep[t][d].store(drumStep);
                 const std::vector<Step> &dSteps =
                     track.drumSequencers[d].getSteps();
                 if (drumStep < dSteps.size()) {
@@ -3059,6 +3063,8 @@ void AudioEngineCore::jumpToStep(int stepIndex) {
 
 int AudioEngineCore::getCurrentStep(int trackIndex, int drumIndex) {
   if (trackIndex >= 0 && trackIndex < 8) {
+    if (drumIndex >= 0 && drumIndex < 16)
+      return mTrackCurrentDrumStep[trackIndex][drumIndex].load();
     return mTrackCurrentStep[trackIndex].load();
   }
   return 0;

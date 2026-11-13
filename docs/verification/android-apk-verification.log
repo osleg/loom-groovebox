@@ -1,0 +1,349 @@
+Verifies
+Verified using v1 scheme (JAR signing): false
+Verified using v2 scheme (APK Signature Scheme v2): true
+Verified using v3 scheme (APK Signature Scheme v3): false
+Verified using v3.1 scheme (APK Signature Scheme v3.1): false
+Verified using v4 scheme (APK Signature Scheme v4): false
+Verified for SourceStamp: false
+Number of signers: 1
+Signer #1 certificate DN: C=US, O=Android, CN=Android Debug
+Signer #1 certificate SHA-256 digest: 9dba368981b066f912a6d760a21f221fd909ffeac9cecbec06c05515c9970b20
+Signer #1 certificate SHA-1 digest: 3161e80cef1c08216a0bcee1e4695cc9062e9272
+Signer #1 certificate MD5 digest: c4e8fb12f5c79b4b8af9ad13179590eb
+Signer #1 key algorithm: RSA
+Signer #1 key size (bits): 2048
+Signer #1 public key SHA-256 digest: df59a02eede1d8461d6e2d690534d4b23391b2f760b50287965be2d8c327f8b6
+Signer #1 public key SHA-1 digest: 3230dea3addc74167897f0a58c258a2199b0f864
+Signer #1 public key MD5 digest: 3848ac95f3ab5690be6c61c273620a16
+Verifying alignment of app/build/outputs/apk/debug/app-debug.apk (4)...
+      87 META-INF/com/android/build/gradle/app-metadata.properties (OK - compressed)
+     181 classes.dex (OK - compressed)
+11195855 classes10.dex (OK - compressed)
+11293791 classes11.dex (OK - compressed)
+14047708 classes2.dex (OK - compressed)
+14149571 classes3.dex (OK - compressed)
+14191682 classes4.dex (OK - compressed)
+14193451 classes5.dex (OK - compressed)
+15113639 classes6.dex (OK - compressed)
+15152743 classes7.dex (OK - compressed)
+15207910 classes8.dex (OK - compressed)
+15265759 lib/arm64-v8a/libc++_shared.so (OK - compressed)
+15953003 lib/arm64-v8a/liboboe.so (OK - compressed)
+16057804 lib/armeabi-v7a/libc++_shared.so (OK - compressed)
+16631561 lib/armeabi-v7a/liboboe.so (OK - compressed)
+16714596 lib/x86/libc++_shared.so (OK - compressed)
+17449251 lib/x86/liboboe.so (OK - compressed)
+17562414 lib/x86_64/libc++_shared.so (OK - compressed)
+18271355 lib/x86_64/liboboe.so (OK - compressed)
+18384922 assets/soundfonts/GeneralUser_GS.sf2 (OK - compressed)
+46719656 assets/wavetables/303.WAV (OK)
+46752528 assets/wavetables/ACID_RIN.WAV (OK)
+46785400 assets/wavetables/ADDITIVE.WAV (OK)
+46818272 assets/wavetables/ALIEN_VO.WAV (OK)
+46851144 assets/wavetables/ALTO_SAX.WAV (OK)
+46884016 assets/wavetables/AMEN_LOO.WAV (OK)
+46916888 assets/wavetables/BBELLS.WAV (OK)
+46949760 assets/wavetables/BOWING.WAV (OK)
+46982632 assets/wavetables/DISCORDA.WAV (OK)
+47015504 assets/wavetables/DRONE.WAV (OK)
+47048376 assets/wavetables/FOLDFEED.WAV (OK)
+47081248 assets/wavetables/GENTLE_M.WAV (OK)
+47114120 assets/wavetables/GLITCHBO.WAV (OK)
+47146992 assets/wavetables/HARMONIC.WAV (OK)
+47179864 assets/wavetables/LSDJ_WAV.WAV (OK)
+47212736 assets/wavetables/MUTATION.WAV (OK)
+47245608 assets/wavetables/ORGAN_DI.WAV (OK)
+47278480 assets/wavetables/PHANTOMS.WAV (OK)
+47311352 assets/wavetables/STREICHF.WAV (OK)
+47344224 assets/wavetables/TALKING.WAV (OK)
+47377096 assets/wavetables/TELEPHON.WAV (OK)
+47409968 assets/wavetables/TEXTURE4.WAV (OK)
+47442840 assets/wavetables/VIRUS_SA.WAV (OK)
+47475712 assets/wavetables/VOICE_A.WAV (OK)
+47508584 assets/wavetables/VOXSYNTH.WAV (OK)
+47541456 assets/wavetables/WAVETRIP.WAV (OK)
+47574328 assets/wavetables/WOWEE.WAV (OK)
+47607189 AndroidManifest.xml (OK - compressed)
+47609809 res/color/vector_tint_color.xml (OK - compressed)
+47610056 res/color/vector_tint_theme_color.xml (OK - compressed)
+47610310 res/drawable-anydpi-v21/ic_call_answer.xml (OK - compressed)
+47611049 res/drawable-anydpi-v21/ic_call_answer_low.xml (OK - compressed)
+47611771 res/drawable-anydpi-v21/ic_call_answer_video.xml (OK - compressed)
+47612274 res/drawable-anydpi-v21/ic_call_answer_video_low.xml (OK - compressed)
+47612748 res/drawable-anydpi-v21/ic_call_decline.xml (OK - compressed)
+47613559 res/drawable-anydpi-v21/ic_call_decline_low.xml (OK - compressed)
+47614340 res/drawable-hdpi-v4/ic_call_answer.png (OK)
+47614888 res/drawable-hdpi-v4/ic_call_answer_low.png (OK)
+47615436 res/drawable-hdpi-v4/ic_call_answer_video.png (OK)
+47615772 res/drawable-hdpi-v4/ic_call_answer_video_low.png (OK)
+47616096 res/drawable-hdpi-v4/ic_call_decline.png (OK)
+47616548 res/drawable-hdpi-v4/ic_call_decline_low.png (OK)
+47617008 res/drawable-hdpi-v4/notification_bg_low_normal.9.png (OK)
+47617304 res/drawable-hdpi-v4/notification_bg_low_pressed.9.png (OK)
+47617608 res/drawable-hdpi-v4/notification_bg_normal.9.png (OK)
+47617908 res/drawable-hdpi-v4/notification_bg_normal_pressed.9.png (OK)
+47618224 res/drawable-hdpi-v4/notification_oversize_large_icon_bg.png (OK)
+47619224 res/drawable-hdpi-v4/notify_panel_notification_icon_bg.png (OK)
+47619400 res/drawable-ldpi-v4/ic_call_answer.png (OK)
+47619744 res/drawable-ldpi-v4/ic_call_answer_low.png (OK)
+47620092 res/drawable-ldpi-v4/ic_call_answer_video.png (OK)
+47620372 res/drawable-ldpi-v4/ic_call_answer_video_low.png (OK)
+47620644 res/drawable-ldpi-v4/ic_call_decline.png (OK)
+47620920 res/drawable-ldpi-v4/ic_call_decline_low.png (OK)
+47621192 res/drawable-mdpi-v4/ic_call_answer.png (OK)
+47621584 res/drawable-mdpi-v4/ic_call_answer_low.png (OK)
+47621976 res/drawable-mdpi-v4/ic_call_answer_video.png (OK)
+47622264 res/drawable-mdpi-v4/ic_call_answer_video_low.png (OK)
+47622540 res/drawable-mdpi-v4/ic_call_decline.png (OK)
+47622880 res/drawable-mdpi-v4/ic_call_decline_low.png (OK)
+47623228 res/drawable-mdpi-v4/notification_bg_low_normal.9.png (OK)
+47623528 res/drawable-mdpi-v4/notification_bg_low_pressed.9.png (OK)
+47623832 res/drawable-mdpi-v4/notification_bg_normal.9.png (OK)
+47624136 res/drawable-mdpi-v4/notification_bg_normal_pressed.9.png (OK)
+47624448 res/drawable-mdpi-v4/notify_panel_notification_icon_bg.png (OK)
+47624627 res/drawable-v21/notification_action_background.xml (OK - compressed)
+47625164 res/drawable-xhdpi-v4/ic_call_answer.png (OK)
+47625864 res/drawable-xhdpi-v4/ic_call_answer_low.png (OK)
+47626564 res/drawable-xhdpi-v4/ic_call_answer_video.png (OK)
+47626936 res/drawable-xhdpi-v4/ic_call_answer_video_low.png (OK)
+47627300 res/drawable-xhdpi-v4/ic_call_decline.png (OK)
+47627828 res/drawable-xhdpi-v4/ic_call_decline_low.png (OK)
+47628364 res/drawable-xhdpi-v4/notification_bg_low_normal.9.png (OK)
+47628672 res/drawable-xhdpi-v4/notification_bg_low_pressed.9.png (OK)
+47629004 res/drawable-xhdpi-v4/notification_bg_normal.9.png (OK)
+47629316 res/drawable-xhdpi-v4/notification_bg_normal_pressed.9.png (OK)
+47629652 res/drawable-xhdpi-v4/notify_panel_notification_icon_bg.png (OK)
+47629864 res/drawable-xxhdpi-v4/ic_call_answer.png (OK)
+47630824 res/drawable-xxhdpi-v4/ic_call_answer_low.png (OK)
+47631788 res/drawable-xxhdpi-v4/ic_call_answer_video.png (OK)
+47632256 res/drawable-xxhdpi-v4/ic_call_answer_video_low.png (OK)
+47632712 res/drawable-xxhdpi-v4/ic_call_decline.png (OK)
+47633416 res/drawable-xxhdpi-v4/ic_call_decline_low.png (OK)
+47634116 res/drawable-xxxhdpi-v4/ic_call_answer.png (OK)
+47635364 res/drawable-xxxhdpi-v4/ic_call_answer_low.png (OK)
+47636616 res/drawable-xxxhdpi-v4/ic_call_answer_video.png (OK)
+47637164 res/drawable-xxxhdpi-v4/ic_call_answer_video_low.png (OK)
+47637704 res/drawable-xxxhdpi-v4/ic_call_decline.png (OK)
+47638604 res/drawable-xxxhdpi-v4/ic_call_decline_low.png (OK)
+47639484 res/drawable/ic_icon.jpg (OK)
+48235328 res/drawable/ic_icon_foreground.png (OK)
+49868284 res/drawable/ic_icon_round.png (OK)
+51501244 res/drawable/ic_routing_cables.png (OK)
+51876509 res/drawable/notification_bg.xml (OK - compressed)
+51876827 res/drawable/notification_bg_low.xml (OK - compressed)
+51877154 res/drawable/notification_icon_background.xml (OK - compressed)
+51877405 res/drawable/notification_tile_bg.xml (OK - compressed)
+51877645 res/layout-v21/notification_action.xml (OK - compressed)
+51878208 res/layout-v21/notification_action_tombstone.xml (OK - compressed)
+51878825 res/layout-v21/notification_template_custom_big.xml (OK - compressed)
+51879692 res/layout-v21/notification_template_icon_group.xml (OK - compressed)
+51880169 res/layout/custom_dialog.xml (OK - compressed)
+51880551 res/layout/ime_base_split_test_activity.xml (OK - compressed)
+51880830 res/layout/ime_secondary_split_test_activity.xml (OK - compressed)
+51881329 res/layout/notification_template_part_chronometer.xml (OK - compressed)
+51881665 res/layout/notification_template_part_time.xml (OK - compressed)
+51881989 res/mipmap-anydpi-v26/ic_icon.xml (OK - compressed)
+51882280 res/mipmap-anydpi-v26/ic_icon_round.xml (OK - compressed)
+51882564 res/mipmap-hdpi-v4/ic_icon.jpg (OK)
+51887892 res/mipmap-mdpi-v4/ic_icon.jpg (OK)
+51890980 res/mipmap-xhdpi-v4/ic_icon.jpg (OK)
+51898552 res/mipmap-xxhdpi-v4/ic_icon.jpg (OK)
+51912860 res/mipmap-xxxhdpi-v4/ic_icon.jpg (OK)
+51934568 resources.arsc (OK)
+52334127 DebugProbesKt.bin (OK - compressed)
+52334992 META-INF/androidx.activity_activity-compose.version (OK)
+52335076 META-INF/androidx.activity_activity-ktx.version (OK)
+52335156 META-INF/androidx.activity_activity.version (OK)
+52335252 META-INF/androidx.annotation_annotation-experimental.version (OK)
+52335336 META-INF/androidx.arch.core_core-runtime.version (OK - compressed)
+52335472 META-INF/androidx.autofill_autofill.version (OK)
+52335568 META-INF/androidx.compose.animation_animation-core.version (OK)
+52335660 META-INF/androidx.compose.animation_animation.version (OK)
+52335760 META-INF/androidx.compose.foundation_foundation-layout.version (OK)
+52335852 META-INF/androidx.compose.foundation_foundation.version (OK)
+52335944 META-INF/androidx.compose.material3_material3.version (OK)
+52336044 META-INF/androidx.compose.material_material-icons-core.version (OK)
+52336148 META-INF/androidx.compose.material_material-icons-extended.version (OK)
+52336244 META-INF/androidx.compose.material_material-ripple.version (OK)
+52336332 META-INF/androidx.compose.material_material.version (OK)
+52336428 META-INF/androidx.compose.runtime_runtime-saveable.version (OK)
+52336516 META-INF/androidx.compose.runtime_runtime.version (OK)
+52336600 META-INF/androidx.compose.ui_ui-geometry.version (OK)
+52336684 META-INF/androidx.compose.ui_ui-graphics.version (OK)
+52336776 META-INF/androidx.compose.ui_ui-test-manifest.version (OK)
+52336856 META-INF/androidx.compose.ui_ui-text.version (OK)
+52336944 META-INF/androidx.compose.ui_ui-tooling-data.version (OK)
+52337036 META-INF/androidx.compose.ui_ui-tooling-preview.version (OK)
+52337120 META-INF/androidx.compose.ui_ui-tooling.version (OK)
+52337200 META-INF/androidx.compose.ui_ui-unit.version (OK)
+52337280 META-INF/androidx.compose.ui_ui-util.version (OK)
+52337356 META-INF/androidx.compose.ui_ui.version (OK)
+52337432 META-INF/androidx.core_core-ktx.version (OK)
+52337504 META-INF/androidx.core_core.version (OK)
+52337608 META-INF/androidx.customview_customview-poolingcontainer.version (OK)
+52337684 META-INF/androidx.emoji2_emoji2.version (OK)
+52337772 META-INF/androidx.interpolator_interpolator.version (OK)
+52337867 META-INF/androidx.lifecycle_lifecycle-livedata-core.version (OK - compressed)
+52338017 META-INF/androidx.lifecycle_lifecycle-process.version (OK - compressed)
+52338164 META-INF/androidx.lifecycle_lifecycle-runtime-ktx.version (OK - compressed)
+52338312 META-INF/androidx.lifecycle_lifecycle-runtime.version (OK - compressed)
+52338462 META-INF/androidx.lifecycle_lifecycle-viewmodel-ktx.version (OK - compressed)
+52338625 META-INF/androidx.lifecycle_lifecycle-viewmodel-savedstate.version (OK - compressed)
+52338784 META-INF/androidx.lifecycle_lifecycle-viewmodel.version (OK - compressed)
+52338936 META-INF/androidx.profileinstaller_profileinstaller.version (OK)
+52339024 META-INF/androidx.savedstate_savedstate-ktx.version (OK)
+52339108 META-INF/androidx.savedstate_savedstate.version (OK)
+52339196 META-INF/androidx.startup_startup-runtime.version (OK)
+52339276 META-INF/androidx.tracing_tracing.version (OK)
+52339380 META-INF/androidx.versionedparcelable_versionedparcelable.version (OK)
+52339460 META-INF/kotlinx_coroutines_android.version (OK)
+52339536 META-INF/kotlinx_coroutines_core.version (OK)
+52339633 META-INF/services/kotlinx.coroutines.CoroutineExceptionHandler (OK - compressed)
+52339780 META-INF/services/kotlinx.coroutines.internal.MainDispatcherFactory (OK - compressed)
+52339903 kotlin/annotation/annotation.kotlin_builtins (OK - compressed)
+52340540 kotlin/collections/collections.kotlin_builtins (OK - compressed)
+52342135 kotlin/coroutines/coroutines.kotlin_builtins (OK - compressed)
+52342362 kotlin/internal/internal.kotlin_builtins (OK - compressed)
+52342815 kotlin/kotlin.kotlin_builtins (OK - compressed)
+52348133 kotlin/ranges/ranges.kotlin_builtins (OK - compressed)
+52349493 kotlin/reflect/reflect.kotlin_builtins (OK - compressed)
+17198584 lib/x86/libloom-native-core.so (OK - compressed)
+18022175 lib/x86_64/libloom-native-core.so (OK - compressed)
+52350825 lib/arm64-v8a/libloom-native-core.so (OK - compressed)
+52587151 lib/armeabi-v7a/libloom-native-core.so (OK - compressed)
+15716741 classes9.dex (OK - compressed)
+Verification succesful
+package: name='com.groovebox.cafa' versionCode='389' versionName='3.2.19-cafa.1' platformBuildVersionName='15' platformBuildVersionCode='35' compileSdkVersion='35' compileSdkVersionCodename='15'
+sdkVersion:'26'
+targetSdkVersion:'35'
+uses-permission: name='android.permission.INTERNET'
+uses-permission: name='android.permission.MODIFY_AUDIO_SETTINGS'
+uses-permission: name='android.permission.RECORD_AUDIO'
+uses-permission: name='android.permission.READ_EXTERNAL_STORAGE' maxSdkVersion='32'
+uses-permission: name='android.permission.WRITE_EXTERNAL_STORAGE' maxSdkVersion='28'
+uses-permission: name='android.permission.READ_MEDIA_AUDIO'
+uses-permission: name='android.permission.FOREGROUND_SERVICE'
+uses-permission: name='android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION'
+uses-permission: name='com.groovebox.cafa.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION'
+application-label:'Loom CAFA'
+application-label-af:'Loom CAFA'
+application-label-am:'Loom CAFA'
+application-label-ar:'Loom CAFA'
+application-label-as:'Loom CAFA'
+application-label-az:'Loom CAFA'
+application-label-be:'Loom CAFA'
+application-label-bg:'Loom CAFA'
+application-label-bn:'Loom CAFA'
+application-label-bs:'Loom CAFA'
+application-label-ca:'Loom CAFA'
+application-label-cs:'Loom CAFA'
+application-label-da:'Loom CAFA'
+application-label-de:'Loom CAFA'
+application-label-el:'Loom CAFA'
+application-label-en-AU:'Loom CAFA'
+application-label-en-CA:'Loom CAFA'
+application-label-en-GB:'Loom CAFA'
+application-label-en-IN:'Loom CAFA'
+application-label-en-XC:'Loom CAFA'
+application-label-es:'Loom CAFA'
+application-label-es-US:'Loom CAFA'
+application-label-et:'Loom CAFA'
+application-label-eu:'Loom CAFA'
+application-label-fa:'Loom CAFA'
+application-label-fi:'Loom CAFA'
+application-label-fr:'Loom CAFA'
+application-label-fr-CA:'Loom CAFA'
+application-label-gl:'Loom CAFA'
+application-label-gu:'Loom CAFA'
+application-label-hi:'Loom CAFA'
+application-label-hr:'Loom CAFA'
+application-label-hu:'Loom CAFA'
+application-label-hy:'Loom CAFA'
+application-label-in:'Loom CAFA'
+application-label-is:'Loom CAFA'
+application-label-it:'Loom CAFA'
+application-label-iw:'Loom CAFA'
+application-label-ja:'Loom CAFA'
+application-label-ka:'Loom CAFA'
+application-label-kk:'Loom CAFA'
+application-label-km:'Loom CAFA'
+application-label-kn:'Loom CAFA'
+application-label-ko:'Loom CAFA'
+application-label-ky:'Loom CAFA'
+application-label-lo:'Loom CAFA'
+application-label-lt:'Loom CAFA'
+application-label-lv:'Loom CAFA'
+application-label-mk:'Loom CAFA'
+application-label-ml:'Loom CAFA'
+application-label-mn:'Loom CAFA'
+application-label-mr:'Loom CAFA'
+application-label-ms:'Loom CAFA'
+application-label-my:'Loom CAFA'
+application-label-nb:'Loom CAFA'
+application-label-ne:'Loom CAFA'
+application-label-nl:'Loom CAFA'
+application-label-or:'Loom CAFA'
+application-label-pa:'Loom CAFA'
+application-label-pl:'Loom CAFA'
+application-label-pt:'Loom CAFA'
+application-label-pt-BR:'Loom CAFA'
+application-label-pt-PT:'Loom CAFA'
+application-label-ro:'Loom CAFA'
+application-label-ru:'Loom CAFA'
+application-label-si:'Loom CAFA'
+application-label-sk:'Loom CAFA'
+application-label-sl:'Loom CAFA'
+application-label-sq:'Loom CAFA'
+application-label-sr:'Loom CAFA'
+application-label-sr-Latn:'Loom CAFA'
+application-label-sv:'Loom CAFA'
+application-label-sw:'Loom CAFA'
+application-label-ta:'Loom CAFA'
+application-label-te:'Loom CAFA'
+application-label-th:'Loom CAFA'
+application-label-tl:'Loom CAFA'
+application-label-tr:'Loom CAFA'
+application-label-uk:'Loom CAFA'
+application-label-ur:'Loom CAFA'
+application-label-uz:'Loom CAFA'
+application-label-vi:'Loom CAFA'
+application-label-zh-CN:'Loom CAFA'
+application-label-zh-HK:'Loom CAFA'
+application-label-zh-TW:'Loom CAFA'
+application-label-zu:'Loom CAFA'
+application-icon-120:'res/mipmap-anydpi-v26/ic_icon.xml'
+application-icon-160:'res/mipmap-anydpi-v26/ic_icon.xml'
+application-icon-240:'res/mipmap-anydpi-v26/ic_icon.xml'
+application-icon-320:'res/mipmap-anydpi-v26/ic_icon.xml'
+application-icon-480:'res/mipmap-anydpi-v26/ic_icon.xml'
+application-icon-640:'res/mipmap-anydpi-v26/ic_icon.xml'
+application-icon-65534:'res/mipmap-anydpi-v26/ic_icon.xml'
+application: label='Loom CAFA' icon='res/mipmap-anydpi-v26/ic_icon.xml'
+application-debuggable
+launchable-activity: name='com.groovebox.MainActivity'  label='' icon=''
+feature-group: label=''
+  uses-gl-es: '0x20000'
+  uses-feature-not-required: name='android.hardware.audio.low_latency'
+  uses-feature-not-required: name='android.hardware.audio.output'
+  uses-feature-not-required: name='android.hardware.audio.pro'
+  uses-feature-not-required: name='android.hardware.bluetooth'
+  uses-feature-not-required: name='android.hardware.faketouch'
+  uses-feature-not-required: name='android.hardware.microphone'
+  uses-feature-not-required: name='android.hardware.midi'
+  uses-feature-not-required: name='android.hardware.touchscreen'
+  uses-feature-not-required: name='android.hardware.usb.host'
+  uses-feature-not-required: name='android.hardware.wifi'
+  uses-feature-not-required: name='android.software.midi'
+  uses-feature: name='android.hardware.screen.landscape'
+  uses-implied-feature: name='android.hardware.screen.landscape' reason='one or more activities have specified a landscape orientation'
+main
+other-activities
+other-receivers
+other-services
+supports-screens: 'small' 'normal' 'large' 'xlarge'
+supports-any-density: 'true'
+locales: '--_--' 'af' 'am' 'ar' 'as' 'az' 'be' 'bg' 'bn' 'bs' 'ca' 'cs' 'da' 'de' 'el' 'en-AU' 'en-CA' 'en-GB' 'en-IN' 'en-XC' 'es' 'es-US' 'et' 'eu' 'fa' 'fi' 'fr' 'fr-CA' 'gl' 'gu' 'hi' 'hr' 'hu' 'hy' 'in' 'is' 'it' 'iw' 'ja' 'ka' 'kk' 'km' 'kn' 'ko' 'ky' 'lo' 'lt' 'lv' 'mk' 'ml' 'mn' 'mr' 'ms' 'my' 'nb' 'ne' 'nl' 'or' 'pa' 'pl' 'pt' 'pt-BR' 'pt-PT' 'ro' 'ru' 'si' 'sk' 'sl' 'sq' 'sr' 'sr-Latn' 'sv' 'sw' 'ta' 'te' 'th' 'tl' 'tr' 'uk' 'ur' 'uz' 'vi' 'zh-CN' 'zh-HK' 'zh-TW' 'zu'
+densities: '120' '160' '240' '320' '480' '640' '65534'
+native-code: 'arm64-v8a' 'armeabi-v7a' 'x86' 'x86_64'
+Verified fork identity, label, four native ABIs, CAFA JNI exports and no signing keystore.
+cd48c384d3ce070fdade52f68bd4993cc3fa9add9d4778bea3f2f7e0d0e8ad74  app/build/outputs/apk/debug/app-debug.apk

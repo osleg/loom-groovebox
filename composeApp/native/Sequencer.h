@@ -77,14 +77,10 @@ public:
     if (mNeedsInitialTrigger) {
       mNeedsInitialTrigger = false;
       mCurrentStep = 0;
-      // Calculate next step for the NEXT advance call
-      if (mDirection == 0) { // Forward
-        mNextStep = (mCurrentStep + 1) % totalSteps;
-      } else if (mDirection == 1) { // Backward
-        mNextStep = (mCurrentStep - 1 + totalSteps) % totalSteps;
-      } else {
-        mNextStep = mCurrentStep; // Simplification for other modes on first hit
-      }
+      // advance() computes the following step below on the next call. Keep
+      // the starting position here; pre-incrementing skipped step 1 (or the
+      // final step in reverse) on the first cycle.
+      mNextStep = mCurrentStep;
       return false; // Not a loop on start
     }
 

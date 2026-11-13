@@ -73,3 +73,10 @@ UserManual.pdf
 
 # Nested native build output
 composeApp/native/build/
+
+# Private Android signing material (never distribute)
+*.keystore
+*.jks
+
+# Never commit local external-model credentials.
+/.agent/skills/custom_models/keys.json

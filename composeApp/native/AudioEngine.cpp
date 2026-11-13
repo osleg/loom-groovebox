@@ -4,6 +4,7 @@
 #include <dlfcn.h>
 #include <unistd.h>
 #include <sys/resource.h>
+#include <algorithm>
 
 #undef LOG_TAG
 #define LOG_TAG "AudioEngine"
@@ -19,13 +20,21 @@ AudioEngine::~AudioEngine() {
 }
 
 bool AudioEngine::start() {
+    std::lock_guard<std::mutex> lock(mStreamMutex);
+    mStartRequested = true;
+    return startLocked();
+}
+
+bool AudioEngine::startLocked() {
     // Idempotent: if output stream is already running, do nothing
     if (mOutputStream && mOutputStream->getState() == oboe::StreamState::Started) {
         return true;
     }
 
     // Close any stale streams
-    stop();
+    stopLocked();
+    const int32_t deviceId = mCafaDeviceId.load();
+    if (deviceId == 0) return false; // Never open the default speaker in CAFA mode.
 
     oboe::AudioStreamBuilder outBuilder;
     outBuilder.setDirection(oboe::Direction::Output);
@@ -33,7 +42,13 @@ bool AudioEngine::start() {
     outBuilder.setSharingMode(oboe::SharingMode::Exclusive);
     outBuilder.setFormat(oboe::AudioFormat::Float);
     outBuilder.setChannelCount(2);
-    outBuilder.setSampleRate(48000);
+    outBuilder.setSampleRate(deviceId > 0 ? 44100 : 48000);
+    if (deviceId > 0) {
+        // OpenSL ES cannot reliably select/report a device. Do not allow that fallback.
+        outBuilder.setAudioApi(oboe::AudioApi::AAudio);
+        outBuilder.setDeviceId(deviceId);
+        outBuilder.setSharingMode(oboe::SharingMode::Shared);
+    }
     outBuilder.setCallback(this);
 
     oboe::Result result = outBuilder.openStream(mOutputStream);
@@ -41,6 +56,13 @@ bool AudioEngine::start() {
         LOGE("Failed to open output stream. Error: %s", oboe::convertToText(result));
         return false;
     }
+
+    if (deviceId > 0 && !cafaRouteMatches(mOutputStream.get())) {
+        LOGE("CAFA output route or format did not match; remaining silent");
+        stopLocked();
+        return false;
+    }
+    mCallbackOutput.store(mOutputStream.get());
 
     // Request 4x burst size to provide a massive safety margin for the OS scheduler
     // when the CPU is throttled or under high load (60%+).
@@ -90,7 +112,7 @@ bool AudioEngine::start() {
     result = mOutputStream->requestStart();
     if (result != oboe::Result::OK) {
         LOGE("Failed to start output stream: %s", oboe::convertToText(result));
-        stop();
+        stopLocked();
         return false;
     }
 
@@ -100,6 +122,14 @@ bool AudioEngine::start() {
 }
 
 void AudioEngine::stop() {
+    std::lock_guard<std::mutex> lock(mStreamMutex);
+    mStartRequested = false;
+    stopLocked();
+}
+
+void AudioEngine::stopLocked() {
+    mCafaAudioEnabled.store(false);
+    mCallbackOutput.store(nullptr);
     if (mOutputStream) {
         mOutputStream->stop();
         mOutputStream->close();
@@ -112,7 +142,50 @@ void AudioEngine::stop() {
     }
 }
 
+bool AudioEngine::cafaRouteMatches(oboe::AudioStream *stream) const {
+    const int32_t expected = mCafaDeviceId.load();
+    return expected > 0 && stream && stream->getAudioApi() == oboe::AudioApi::AAudio &&
+           stream->getDeviceId() == expected && stream->getSampleRate() == 44100 &&
+           stream->getChannelCount() == 2 && stream->getFormat() == oboe::AudioFormat::Float;
+}
+
+bool AudioEngine::setCafaOutputDevice(int32_t deviceId) {
+    std::lock_guard<std::mutex> lock(mStreamMutex);
+    // Mute before closing/changing the route. No implicit re-enable after any restart.
+    mCafaAudioEnabled.store(false);
+    stopLocked();
+    mCafaDeviceId.store(deviceId < 0 ? -1 : deviceId);
+    if (!mStartRequested) return false;
+    return startLocked();
+}
+
+int32_t AudioEngine::getCafaOutputDevice() {
+    std::lock_guard<std::mutex> lock(mStreamMutex);
+    if (!mStartRequested || !mOutputStream ||
+        mCallbackOutput.load() != mOutputStream.get() ||
+        mOutputStream->getState() != oboe::StreamState::Started ||
+        !cafaRouteMatches(mOutputStream.get())) return 0;
+    return mOutputStream->getDeviceId();
+}
+
+bool AudioEngine::isCafaAudioEnabled() {
+    std::lock_guard<std::mutex> lock(mStreamMutex);
+    return mCafaAudioEnabled.load() && mStartRequested && mOutputStream &&
+        mCallbackOutput.load() == mOutputStream.get() &&
+        mOutputStream->getState() == oboe::StreamState::Started &&
+        cafaRouteMatches(mOutputStream.get());
+}
+
+void AudioEngine::setCafaAudioEnabled(bool enabled) {
+    std::lock_guard<std::mutex> lock(mStreamMutex);
+    mCafaAudioEnabled.store(enabled && mStartRequested && mOutputStream &&
+        mCallbackOutput.load() == mOutputStream.get() &&
+        mOutputStream->getState() == oboe::StreamState::Started &&
+        cafaRouteMatches(mOutputStream.get()));
+}
+
 void AudioEngine::refreshInputStreamState() {
+    std::lock_guard<std::mutex> lock(mStreamMutex);
     if (!mInputStream) return;
 
     bool needed = mCore->isInputNeeded();
@@ -142,6 +215,18 @@ typedef int (*APHint_reportActualWorkDurationFn)(APerformanceHintSession*, int64
 oboe::DataCallbackResult AudioEngine::onAudioReady(oboe::AudioStream *audioStream,
                                                    void *audioData,
                                                    int32_t numFrames) {
+    if (audioStream->getDirection() == oboe::Direction::Output &&
+        mCafaDeviceId.load() >= 0 && !cafaRouteMatches(audioStream)) {
+        // Latch a changed route silent even if it later reports the original ID.
+        mCafaAudioEnabled.store(false);
+    }
+    if (audioStream->getDirection() == oboe::Direction::Output &&
+        (mCallbackOutput.load() != audioStream ||
+         (mCafaDeviceId.load() >= 0 &&
+          (!mCafaAudioEnabled.load() || !cafaRouteMatches(audioStream))))) {
+        std::fill_n(static_cast<float *>(audioData), numFrames * audioStream->getChannelCount(), 0.0f);
+        return oboe::DataCallbackResult::Continue;
+    }
     // 1. Start Timing for ADPF (v3.1.25: Real-time safe loop)
     struct timespec startTime, endTime;
     if (mAdpfInitialized && mReportDurationFn) {
@@ -168,6 +253,12 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(oboe::AudioStream *audioStrea
     DenormalDisabler disabler;
     if (audioStream->getDirection() == oboe::Direction::Output) {
         mCore->render(static_cast<float *>(audioData), numFrames);
+        // A stop/mute may arrive during render. Discard that block rather than leak audio.
+        if (mCallbackOutput.load() != audioStream ||
+            (mCafaDeviceId.load() >= 0 &&
+             (!mCafaAudioEnabled.load() || !cafaRouteMatches(audioStream)))) {
+            std::fill_n(static_cast<float *>(audioData), numFrames * audioStream->getChannelCount(), 0.0f);
+        }
 
         // 3. Report Performance to OS (Wait-free pointer call)
         if (mAdpfInitialized && mAdpfSession && mReportDurationFn) {
@@ -185,9 +276,23 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(oboe::AudioStream *audioStrea
     return oboe::DataCallbackResult::Continue;
 }
 
+void AudioEngine::onErrorBeforeClose(oboe::AudioStream *audioStream, oboe::Result result) {
+    if (audioStream == mCallbackOutput.load()) {
+        mCafaAudioEnabled.store(false);
+        mCallbackOutput.store(nullptr);
+    }
+}
+
 void AudioEngine::onErrorAfterClose(oboe::AudioStream *audioStream, oboe::Result result) {
-    if (result == oboe::Result::ErrorDisconnected) {
+    // CAFA failures are latched silent. The Android adapter must explicitly reselect
+    // and verify USB before unmuting. Never reopen the default device here.
+    if (mCafaDeviceId.load() >= 0) return;
+    // close() may be waiting for this callback: never block behind the control mutex.
+    std::unique_lock<std::mutex> lock(mStreamMutex, std::try_to_lock);
+    if (!lock.owns_lock() || !mStartRequested) return;
+    if (result == oboe::Result::ErrorDisconnected &&
+        (audioStream == mOutputStream.get() || audioStream == mInputStream.get())) {
         LOGE("Audio stream disconnected, restarting...");
-        start();
+        startLocked();
     }
 }
