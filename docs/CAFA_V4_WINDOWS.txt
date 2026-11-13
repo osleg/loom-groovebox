@@ -1,0 +1,52 @@
+Loom CAFA v4: Windows reassembly and safe installation
+
+Download all three parts into the same folder:
+  Loom-CAFA-v4.apk.001
+  Loom-CAFA-v4.apk.002
+  Loom-CAFA-v4.apk.003
+
+These are RAW parts, not ZIP files or individually installable APKs.
+
+In Windows Command Prompt (cmd.exe), change to that folder, then run this
+single command on one line:
+
+copy /b Loom-CAFA-v4.apk.001+Loom-CAFA-v4.apk.002+Loom-CAFA-v4.apk.003 Loom-CAFA-v4.apk
+
+The result must be exactly 52,381,137 bytes. Check it with:
+
+certutil -hashfile Loom-CAFA-v4.apk SHA256
+
+Expected SHA-256:
+b0d891205889042037b040aca2111fafd509614b9d6deba3a1524cbc0eaab2c7
+
+Then transfer/install Loom-CAFA-v4.apk on Android. Do not install a .001/.002/.003
+part, and do not rename a single part to .apk.
+
+IMPORTANT
+- Install alongside the working old app. This app is named Loom CAFA v4,
+  package com.groovebox.cafa.v4, version 3.2.19-cafa.4, code 390.
+- The original signing key was lost. The separate package avoids uninstalling
+  the old app or erasing its projects. Projects are not imported automatically;
+  export/import through Loom and keep the originals.
+- Disconnect/close older Loom/CAFA apps before connecting the v4 FM1 link.
+- Requires matching protocol-v4 firmware. Old v3 firmware will not connect.
+- Turn volume down and use a direct data cable/stable power. Start with a
+  disposable project and wait for “FM1 synchronized” before playing.
+- REC is unavailable; complete recorded-step synchronization is a follow-up.
+- LFO, FX, ARP, pattern controls and held-step edits are mapped. Full Skiff
+  workflow parity, preset loading, sampling and arrangement stay on the phone.
+- Firmware omits factory instrument sample sets to fit; user slots are retained.
+- No physical flash, phone install or audio listening qualification was done.
+
+Full control guide: Loom-CAFA-v4-READ-FIRST.md, saved with the deliverables.
+Matching app source:
+https://github.com/osleg/loom-groovebox/tree/cafa/loom-v4-controls-20261113
+Verified app commit: e98cbbf4dd3eeb146d3ce42e71910f0db57e7a90
+
+Part sizes and SHA-256 (optional individual checks):
+Loom-CAFA-v4.apk.001: 18874368 bytes
+9e4c4d2759c0ccecab73c4afad352de5cbb97931a43a049b29baf0ef6ee643b6
+Loom-CAFA-v4.apk.002: 18874368 bytes
+5677f3954f30c2b7b5056b6b86366a25a0baf2cf736147ba6eaaab4965080119
+Loom-CAFA-v4.apk.003: 14632401 bytes
+a5abe5b24fff20b1e6b3aa3f9cdc76f32f74626d4d0b3c7d6a5f444e4bbc6bf9
