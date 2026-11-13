@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 package com.groovebox.cafa;
 
-/** Bounded CAFA v3 lease. Port-open never implies firmware takeover or audible output. */
+/** Bounded CAFA v4 lease. Port-open never implies firmware takeover or audible output. */
 public final class CafaSession {
     public interface Host {
         void send(byte[] bytes) throws Exception;
@@ -45,7 +45,7 @@ public final class CafaSession {
     public void tick(long now) {
         if (!open) return;
         if (now - lastAck >= 1500) {
-            fail(waiting ? "No CAFA v3 firmware reply. Select matching FM1 MIDI/USB audio endpoints."
+            fail(waiting ? "No CAFA v4 firmware reply. Select matching FM1 MIDI/USB audio endpoints."
                          : "FM1 stopped acknowledging state. Output muted; reconnect to continue.");
             return;
         }

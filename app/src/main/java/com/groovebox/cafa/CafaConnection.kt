@@ -63,6 +63,23 @@ class CafaConnection(context: Context, private val native: NativeLib,
                 value.subStepOffset, value.noteOffsets.toFloatArray(), value.noteVelocities.toFloatArray())
         }
         override fun playhead(track: Int, lane: Int) = native.getCurrentStep(track, lane)
+        override fun lfo(index: Int, value: LfoState) {
+            native.setGenericLfoParam(index, 0, value.rate)
+            native.setGenericLfoParam(index, 1, value.depth)
+            native.setGenericLfoParam(index, 2, value.shape.toFloat())
+            native.setGenericLfoParam(index, 3, if (value.sync) 1f else 0f)
+        }
+        override fun arp(track: Int, value: ArpConfig) {
+            native.setArpConfig(track, value.mode.ordinal, value.octaves, value.inversion,
+                value.isLatched, value.isMutated, value.rhythms.map { it.toBooleanArray() }.toTypedArray(),
+                value.randomSequence.toIntArray(), value.gateLengths.toFloatArray(), value.probability, value.weird)
+            native.setArpRate(track, value.arpRate, value.arpDivisionMode)
+            native.setArpStrum(track, value.strum)
+        }
+        override fun fxEnabled(index: Int, enabled: Boolean) { native.setFxEnabled(index, enabled) }
+        override fun swing(value: Float) { native.setSwing(value) }
+        override fun humanize(track: Int, value: Float) { native.setTrackHumanize(track, value) }
+        override fun lane(track: Int, value: Int) { native.setSelectedFmDrumInstrument(track, value) }
     }, { model.setSelectedTrack(it); native.setFocusedTrack(it) }, {
         // Snapshot only the phone's own project, never FM1 standalone data.
         PersistenceManager.saveProject(model.state, "last_session.gbx")
@@ -132,7 +149,7 @@ class CafaConnection(context: Context, private val native: NativeLib,
                 override fun applied() {
                     if (native.getCafaOutputDevice() != audioId) { disconnect("USB route verification failed. Output stays muted."); return }
                     native.setCafaAudioEnabled(true); connected = true
-                    status = "FM1 synchronized · Loom 8 tracks · proxy v3"
+                    status = "FM1 synchronized · Loom 8 tracks · controls v4"
                 }
                 override fun stopped(reason: String) { disconnect(reason) }
             })
@@ -145,7 +162,7 @@ class CafaConnection(context: Context, private val native: NativeLib,
                 override fun onSend(data: ByteArray, offset: Int, count: Int, timestamp: Long) { synchronized(decoder) { decoder.feed(data, offset, count) } }
                 override fun onFlush() { synchronized(decoder) { decoder.reset() } }
             })
-            status = "Waiting for Loom CAFA v3 firmware…"
+            status = "Waiting for Loom CAFA v4 firmware…"
             link.begin(1 + SecureRandom().nextInt(16383), SystemClock.elapsedRealtime())
             main.postDelayed(timer, 34)
             } catch (error: Exception) { disconnect("USB MIDI setup failed safely: ${error.javaClass.simpleName}") }

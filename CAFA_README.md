@@ -1,6 +1,9 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
 # Loom CAFA: FM1 integration prototype 1
 
+**v4 reconstruction branch:** see [current work and limits](docs/CAFA_V4.md).
+The original v3 baseline documentation below is retained for provenance.
+
 This is an experimental fork of **Loom Groovebox**, not the previous small CAFA
 synth app. The phone runs Loom's existing synthesizers, sampler, effects and
 sequencer. FM1 is the connected controller/display and selected USB audio output.
