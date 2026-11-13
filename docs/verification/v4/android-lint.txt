@@ -1,0 +1,288 @@
+/workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/app/src/main/java/com/groovebox/cafa/CafaConnection.kt:184: Warning: Consider using apply() instead; commit writes its data to persistent storage immediately, whereas apply will handle it in the background [ApplySharedPref]
+        preferences.edit().putBoolean(HELD, false).commit()
+                                                   ~~~~~~~~
+
+   Explanation for issues of type "ApplySharedPref":
+   Consider using apply() instead of commit on shared preferences. Whereas
+   commit blocks and writes its data to persistent storage immediately, apply
+   will handle it in the background.
+
+/workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/gradle/libs.versions.toml:9: Warning: Not targeting the latest versions of Android; compatibility modes apply. Consider testing and updating this version. Consult the android.os.Build.VERSION_CODES javadoc for details. [OldTargetApi]
+android-targetSdk = "35"
+                    ~~~~
+
+   Explanation for issues of type "OldTargetApi":
+   When your application or sdk runs on a version of Android that is more
+   recent than your targetSdkVersion specifies that it has been tested with,
+   various compatibility modes kick in. This ensures that your application
+   continues to work, but it may look out of place. For example, if the
+   targetSdkVersion is less than 14, your app may get an option button in the
+   UI.
+
+   To fix this issue, set the targetSdkVersion to the highest available value.
+   Then test your app to make sure everything works correctly. You may want to
+   consult the compatibility notes to see what changes apply to each version
+   you are adding support for:
+   https://developer.android.com/reference/android/os/Build.VERSION_CODES.html
+   as well as follow this guide:
+   https://developer.android.com/distribute/best-practices/develop/target-sdk.
+   html
+
+   https://developer.android.com/distribute/best-practices/develop/target-sdk.html
+
+/workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/gradle/wrapper/gradle-wrapper.properties:3: Warning: A newer version of Gradle than 8.13 is available: 8.14.7 [AndroidGradlePluginVersion]
+distributionUrl=https\://services.gradle.org/distributions/gradle-8.13-bin.zip
+                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/gradle/libs.versions.toml:2: Warning: A newer version of com.android.library than 8.13.2 is available: 9.5.1 [AndroidGradlePluginVersion]
+agp = "8.13.2"
+      ~~~~~~~~
+
+   Explanation for issues of type "AndroidGradlePluginVersion":
+   This detector looks for usage of the Android Gradle Plugin where the
+   version you are using is not the current stable release. Using older
+   versions is fine, and there are cases where you deliberately want to stick
+   with an older version. However, you may simply not be aware that a more
+   recent version is available, and that is what this lint check helps find.
+
+/workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/gradle/libs.versions.toml:6: Warning: A newer version of androidx.activity:activity-compose than 1.8.1 is available: 1.13.0 [GradleDependency]
+androidx-activityCompose = "1.8.1"
+                           ~~~~~~~
+/workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/gradle/libs.versions.toml:7: Warning: A newer version of compileSdkVersion than 35 is available: 36 [GradleDependency]
+android-compileSdk = "35"
+                     ~~~~
+
+   Explanation for issues of type "GradleDependency":
+   This detector looks for usages of libraries where the version you are using
+   is not the current stable release. Using older versions is fine, and there
+   are cases where you deliberately want to stick with an older version.
+   However, you may simply not be aware that a more recent version is
+   available, and that is what this lint check helps find.
+
+/workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/gradle/libs.versions.toml:3: Warning: A newer version of org.jetbrains.kotlin.android than 1.9.0 is available: 2.4.21 [NewerVersionAvailable]
+kotlin = "1.9.0"
+         ~~~~~~~
+/workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/gradle/libs.versions.toml:3: Warning: A newer version of org.jetbrains.kotlin.multiplatform than 1.9.0 is available: 2.4.21 [NewerVersionAvailable]
+kotlin = "1.9.0"
+         ~~~~~~~
+/workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/gradle/libs.versions.toml:3: Warning: A newer version of org.jetbrains.kotlin.plugin.serialization than 1.9.0 is available: 2.4.21 [NewerVersionAvailable]
+kotlin = "1.9.0"
+         ~~~~~~~
+/workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/gradle/libs.versions.toml:4: Warning: A newer version of org.jetbrains.compose than 1.5.11 is available: 1.12.2 [NewerVersionAvailable]
+compose = "1.5.11"
+          ~~~~~~~~
+/workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/gradle/libs.versions.toml:5: Warning: A newer version of org.jetbrains.kotlinx:kotlinx-serialization-json than 1.5.1 is available: 1.13.0 [NewerVersionAvailable]
+kotlinx-serialization = "1.5.1"
+                        ~~~~~~~
+
+   Explanation for issues of type "NewerVersionAvailable":
+   This detector checks with a central repository to see if there are newer
+   versions available for the dependencies used by this project. This is
+   similar to the GradleDependency check, which checks for newer versions
+   available in the Android SDK tools and libraries, but this works with any
+   MavenCentral dependency, and connects to the library every time, which
+   makes it more flexible but also much slower.
+
+/workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/app/src/main/AndroidManifest.xml:45: Warning: Fixed screen orientations will be ignored in most cases, starting from Android 16. Android is moving toward a model where apps are expected to adapt to various orientations, display sizes, and aspect ratios. [DiscouragedApi]
+            android:screenOrientation="sensorLandscape"
+            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+   Explanation for issues of type "DiscouragedApi":
+   Discouraged APIs are allowed and are not deprecated, but they may be unfit
+   for common use (e.g. due to slow performance or subtle behavior).
+
+/workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/app/src/main/java/com/groovebox/AudioCaptureService.kt:143: Warning: Unnecessary; SDK_INT is always >= 26 [ObsoleteSdkInt]
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/app/src/main/java/com/groovebox/MainActivity.kt:205: Warning: Unnecessary; Build.VERSION.SDK_INT <= 32 is always true here (SDK_INT ≥ 26 and < 33) [ObsoleteSdkInt]
+        } else if (Build.VERSION.SDK_INT <= 32) {
+                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/app/src/main/res/mipmap-anydpi-v26: Warning: This folder configuration (v26) is unnecessary; minSdkVersion is 26. Merge all the resources in this folder into mipmap-anydpi. [ObsoleteSdkInt]
+
+   Explanation for issues of type "ObsoleteSdkInt":
+   This check flags version checks that are not necessary, because the
+   minSdkVersion (or surrounding known API level) is already at least as high
+   as the version checked for.
+
+   Similarly, it also looks for resources in -vNN folders, such as values-v14
+   where the version qualifier is less than or equal to the minSdkVersion,
+   where the contents should be merged into the best folder.
+
+/workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/app/src/main/java/com/groovebox/cafa/CafaPanel.kt:28: Hint: Prefer mutableIntStateOf instead of mutableStateOf [AutoboxingStateCreation from androidx.compose.runtime]
+        var refresh by remember { mutableStateOf(0) }
+                                  ~~~~~~~~~~~~~~
+
+   Explanation for issues of type "AutoboxingStateCreation":
+   Calling mutableStateOf<T>() when T is either backed by a primitive type on
+   the JVM or is a value class results in a state implementation that requires
+   all state values to be boxed. This usually causes an additional allocation
+   for each state write, and adds some additional work to auto-unbox values
+   when reading the value of the state. Instead, prefer to use a specialized
+   primitive state implementation for Int, Long, Float, and Double when the
+   state does not need to track null values and does not override the default
+   SnapshotMutationPolicy.
+
+   Vendor: Jetpack Compose
+   Identifier: androidx.compose.runtime
+   Feedback: https://issuetracker.google.com/issues/new?component=612128
+
+/workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/app/src/main/res/drawable/ic_icon.jpg: Warning: The resource R.drawable.ic_icon appears to be unused [UnusedResources]
+/workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/app/src/main/res/drawable/ic_routing_cables.png: Warning: The resource R.drawable.ic_routing_cables appears to be unused [UnusedResources]
+
+   Explanation for issues of type "UnusedResources":
+   Unused resources make applications larger and slow down builds.
+
+
+   The unused resource check can ignore tests. If you want to include
+   resources that are only referenced from tests, consider packaging them in a
+   test source set instead.
+
+   You can include test sources in the unused resource check by setting the
+   system property lint.unused-resources.include-tests =true, and to exclude
+   them (usually for performance reasons), use
+   lint.unused-resources.exclude-tests =true.
+   ,
+
+   Available options:
+
+   **skip-libraries** (default is true):
+   Whether the unused resource check should skip reporting unused resources in libraries.
+
+   Many libraries will declare resources that are part of the library surface; other modules depending on the library will also reference the resources. To avoid reporting all these resources as unused (in the context of a library), the unused resource check normally skips reporting unused resources in libraries. Instead, run the unused resource check on the consuming app module (along with `checkDependencies=true`).
+
+   However, there are cases where you want to check that all the resources declared in a library are used; in that case, you can disable the skip option.
+
+   To configure this option, use a `lint.xml` file with an <option> like this:
+
+   ```xml
+   <lint>
+       <issue id="UnusedResources">
+           <option name="skip-libraries" value="true" />
+       </issue>
+   </lint>
+   ```
+
+/workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/app/src/main/res/mipmap-hdpi/ic_icon.jpg: Warning: Launcher icons should not fill every pixel of their square region; see the design guide for details [IconLauncherShape]
+/workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/app/src/main/res/mipmap-mdpi/ic_icon.jpg: Warning: Launcher icons should not fill every pixel of their square region; see the design guide for details [IconLauncherShape]
+/workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/app/src/main/res/mipmap-xhdpi/ic_icon.jpg: Warning: Launcher icons should not fill every pixel of their square region; see the design guide for details [IconLauncherShape]
+/workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/app/src/main/res/mipmap-xxhdpi/ic_icon.jpg: Warning: Launcher icons should not fill every pixel of their square region; see the design guide for details [IconLauncherShape]
+/workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/app/src/main/res/mipmap-xxxhdpi/ic_icon.jpg: Warning: Launcher icons should not fill every pixel of their square region; see the design guide for details [IconLauncherShape]
+
+   Explanation for issues of type "IconLauncherShape":
+   According to the Android Design Guide
+   (https://d.android.com/r/studio-ui/designer/material/iconography) your
+   launcher icons should "use a distinct silhouette", a "three-dimensional,
+   front view, with a slight perspective as if viewed from above, so that
+   users perceive some depth."
+
+   The unique silhouette implies that your launcher icon should not be a
+   filled square.
+
+/workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/app/src/main/res/mipmap-anydpi-v26/ic_icon.xml:2: Warning: The application adaptive icon is missing a monochrome tag [MonochromeLauncherIcon]
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+^
+/workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/app/src/main/res/mipmap-anydpi-v26/ic_icon_round.xml:2: Warning: The application adaptive roundIcon is missing a monochrome tag [MonochromeLauncherIcon]
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+^
+
+   Explanation for issues of type "MonochromeLauncherIcon":
+   If android:roundIcon and android:icon are both in your manifest, you must
+   either remove the reference to android:roundIcon if it is not needed; or,
+   supply the monochrome icon in the drawable defined by the android:roundIcon
+   and android:icon attribute.
+
+   For example, if android:roundIcon and android:icon are both in the
+   manifest, a launcher might choose to use android:roundIcon over
+   android:icon to display the adaptive app icon. Therefore, your themed
+   application iconwill not show if your monochrome attribute is not also
+   specified in android:roundIcon.
+
+/workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/app/src/main/res/drawable/ic_icon.jpg: Warning: Found bitmap drawable res/drawable/ic_icon.jpg in densityless folder [IconLocation]
+/workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/app/src/main/res/drawable/ic_icon_foreground.png: Warning: Found bitmap drawable res/drawable/ic_icon_foreground.png in densityless folder [IconLocation]
+/workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/app/src/main/res/drawable/ic_icon_round.png: Warning: Found bitmap drawable res/drawable/ic_icon_round.png in densityless folder [IconLocation]
+/workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/app/src/main/res/drawable/ic_routing_cables.png: Warning: Found bitmap drawable res/drawable/ic_routing_cables.png in densityless folder [IconLocation]
+
+   Explanation for issues of type "IconLocation":
+   The res/drawable folder is intended for density-independent graphics such
+   as shapes defined in XML. For bitmaps, move it to drawable-mdpi and
+   consider providing higher and lower resolution versions in drawable-ldpi,
+   drawable-hdpi and drawable-xhdpi. If the icon really is density independent
+   (for example a solid color) you can place it in drawable-nodpi.
+
+   https://developer.android.com/guide/practices/screens_support.html
+
+/workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/app/src/main/res/drawable/ic_icon_round.png: Warning: The following unrelated icon files have identical contents: ic_icon_foreground.png, ic_icon_round.png [IconDuplicates]
+
+   Explanation for issues of type "IconDuplicates":
+   If an icon is repeated under different names, you can consolidate and just
+   use one of the icons and delete the others to make your application
+   smaller. However, duplicated icons usually are not intentional and can
+   sometimes point to icons that were accidentally overwritten or accidentally
+   not updated.
+
+/workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/app/src/main/java/com/groovebox/cafa/CafaConnection.kt:126: Warning: Use the KTX extension function SharedPreferences.edit instead? [UseKtx]
+        if (!preferences.edit().putBoolean(HELD, true).commit()) {
+             ~~~~~~~~~~~~~~~~~~
+/workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/app/src/main/java/com/groovebox/cafa/CafaConnection.kt:184: Warning: Use the KTX extension function SharedPreferences.edit instead? [UseKtx]
+        preferences.edit().putBoolean(HELD, false).commit()
+        ~~~~~~~~~~~~~~~~~~
+/workspace/scratch/5f73289f31a8/loom-v4-rebuild-20261113/app/src/main/java/com/groovebox/MainActivity.kt:239: Warning: Use the KTX extension function SharedPreferences.edit instead? [UseKtx]
+                    prefs.edit().putBoolean("crashed_on_launch", false).apply()
+                    ~~~~~~~~~~~~
+
+   Explanation for issues of type "UseKtx":
+   The Android KTX libraries decorates the Android platform SDK as well as
+   various libraries with more convenient extension functions available from
+   Kotlin, allowing you to use default parameters, named parameters, and
+   more.
+
+   Available options:
+
+   **remove-defaults** (default is true):
+   Whether to skip arguments that match the defaults provided by the extension.
+
+   Extensions often provide default values for some of the parameters. For example:
+   ```kotlin
+   fun Path.readLines(charset: Charset = Charsets.UTF_8): List<String> { return Files.readAllLines(this, charset) }
+   ```
+   This lint check will by default automatically omit parameters that match the default, so if your code was calling
+
+   ```kotlin
+   Files.readAllLines(file, Charset.UTF_8)
+   ```
+   lint would replace this with
+   ```kotlin
+   file.readLines()
+   ```
+   rather than
+
+   ```kotlin
+   file.readLines(Charset.UTF_8
+   ```
+   You can turn this behavior off using this option.
+
+   To configure this option, use a `lint.xml` file with an <option> like this:
+
+   ```xml
+   <lint>
+       <issue id="UseKtx">
+           <option name="remove-defaults" value="true" />
+       </issue>
+   </lint>
+   ```
+
+   **require-present** (default is true):
+   Whether to only offer extensions already available.
+
+   This option lets you only have lint suggest extension replacements if those extensions are already available on the class path (in other words, you're already depending on the library containing the extension method.)
+
+   To configure this option, use a `lint.xml` file with an <option> like this:
+
+   ```xml
+   <lint>
+       <issue id="UseKtx">
+           <option name="require-present" value="true" />
+       </issue>
+   </lint>
+   ```
+
+0 errors, 32 warnings, 1 hint

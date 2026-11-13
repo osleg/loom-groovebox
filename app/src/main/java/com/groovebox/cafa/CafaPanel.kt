@@ -30,10 +30,10 @@ fun CafaPanel(connection: CafaConnection) {
         val outputs = remember(refresh) { connection.audioDevices() }
         var midiId by remember { mutableStateOf<Int?>(null) }
         var audioId by remember { mutableStateOf<Int?>(null) }
-        AlertDialog(onDismissRequest = { show = false }, title = { Text("Loom + FM1 · first slice") },
+        AlertDialog(onDismissRequest = { show = false }, title = { Text("Loom + FM1 · v4 controls") },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
-                    Text("Choose the FM1 USB MIDI and audio outputs. Requires matching CAFA v3 firmware. All eight Loom tracks are selectable; patterns remain 4–64 steps. ENV is Loom percentages on a proxy page, not native Skiff ENV.")
+                    Text("Choose the FM1 USB MIDI and audio outputs. Requires matching CAFA v4 firmware. All eight Loom tracks are selectable; patterns remain 4–64 steps. Install this app alongside the older CAFA app; projects are not imported automatically.")
                     Spacer(Modifier.height(8.dp))
                     Text("USB MIDI")
                     devices.forEach { info ->
@@ -50,7 +50,7 @@ fun CafaPanel(connection: CafaConnection) {
                     }
                     if (outputs.isEmpty()) Text("No USB audio output detected.")
                     TextButton(onClick = { refresh++ }) { Text("REFRESH DEVICES") }
-                    Text("ALGORITHM selects tracks 1–8. SELECT changes pages or sequence bank. White keys edit 16 visible steps in SEQ. PRESETS selects a drum/slice row. Sound/preset loading, FX, sampling, advanced edits and recording remain on the phone.")
+                    Text("ALGORITHM selects tracks 1–8. Page buttons select SOUND, ENV, FX, LFO, ARP, MIX or SEQ. SELECT stays within that family; GLO + SELECT changes tempo. PRESETS scrolls sequence banks. Tap a white SEQ key to toggle a step; hold it and turn knobs for pitch, velocity, gate and probability. REC is unavailable. Preset loading, sampling and advanced arrangement remain on the phone.")
                     if (connection.notice.isNotEmpty()) Text(connection.notice)
                     if (connection.routeHeld) TextButton(onClick = { connection.restoreNormalAudio(); show = false }) { Text("RESTORE NORMAL AUDIO") }
                 }

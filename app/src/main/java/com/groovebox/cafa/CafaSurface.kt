@@ -48,6 +48,7 @@ class CafaSurface(
     private val heldNotes = IntArray(27) { -1 }
     private var lastTab = -1
     private var lastTrack = -1
+    private var stepContext = ""
     private data class HeldStep(val track: Int, val lane: Int, val index: Int, var edited: Boolean = false)
     private val heldSteps = arrayOfNulls<HeldStep>(27)
     var lfoIndex = 0; private set
@@ -76,6 +77,9 @@ class CafaSurface(
             page = when (s.selectedTab) { 1 -> SOUND; 2 -> SEQ; 3 -> FX; 4 -> LFO; else -> HOME }
             lastTab = s.selectedTab
         }
+        val t = s.tracks[s.selectedTrackIndex]
+        val context = "${s.selectedTrackIndex}:${t.engineType}:${lane(t)}:${bank(s,t)}:${t.patternLength}"
+        if (context != stepContext) { heldSteps.fill(null); stepContext = context }
         return s
     }
     fun choosePage(value: Int) {
@@ -131,7 +135,7 @@ class CafaSurface(
             write(read().copy(isPlaying = playing, isRecording = playing && read().isRecording))
         }
         if ((pressed and (1 shl 11)) != 0) {
-            notice("REC awaits complete recorded-step synchronization; use phone recording for now.")
+            notice("FM1 REC is unavailable in this version: complete recorded-step synchronization is not implemented.")
         }
         if ((pressed and (1 shl 12)) != 0) octave = (octave - 1).coerceIn(-3, 3)
         if ((pressed and (1 shl 13)) != 0) octave = (octave + 1).coerceIn(-3, 3)
@@ -291,13 +295,12 @@ class CafaSurface(
             }
             FX -> when (index) {
                 0 -> fxIndex = (fxIndex + delta).coerceIn(0, minOf(t.fxSends.lastIndex, t.fxMix.lastIndex, s.fxEnabled.lastIndex))
-                1, 2 -> {
-                    val old = if (index == 1) t.fxSends else t.fxMix
-                    val v = (old[fxIndex] + delta / 100f).coerceIn(0f, 1f)
-                    val updated = old.mapIndexed { n, x -> if (n == fxIndex) v else x }
-                    engine.parameter(i, 2000 + fxIndex * 10 + index - 1, v)
-                    replaceTrack(s, if (index == 1) t.copy(fxSends = updated) else t.copy(fxMix = updated))
+                1 -> {
+                    val v = (t.fxSends[fxIndex] + delta / 100f).coerceIn(0f, 1f)
+                    engine.parameter(i, 2000 + fxIndex * 10, v)
+                    replaceTrack(s, t.copy(fxSends = t.fxSends.mapIndexed { n, x -> if (n == fxIndex) v else x }))
                 }
+                2 -> notice("Loom's DSP fixes FX mix at unity. SEND controls the wet contribution.")
                 else -> {
                     val v = delta > 0; engine.fxEnabled(fxIndex, v)
                     write(s.copy(fxEnabled = s.fxEnabled.mapIndexed { n, old -> if (n == fxIndex) v else old }))
@@ -335,6 +338,8 @@ class CafaSurface(
     }
     fun snapshot(): ByteArray {
         val s = state(); val t = s.tracks[s.selectedTrackIndex]
+        lfoIndex = lfoIndex.coerceIn(0, s.lfos.lastIndex)
+        fxIndex = fxIndex.coerceIn(0, minOf(t.fxSends.lastIndex, t.fxMix.lastIndex, s.fxEnabled.lastIndex))
         require(s.tempo.isFinite() && s.tempo in 12f..300f) { "Tempo outside CAFA v4 range" }
         val length = t.patternLength.coerceIn(1, 64); val start = bank(s, t) * 16
         val head = if (s.isPlaying) engine.playhead(s.selectedTrackIndex, lane(t)).takeIf { it in 0 until length } ?: Protocol.NONE else Protocol.NONE
@@ -371,7 +376,7 @@ class CafaSurface(
             LFO -> s.lfos[lfoIndex].let { listOf("RATE %" to (it.rate * 100).roundToInt(),
                 "DEPTH %" to (it.depth * 100).roundToInt(), "SHAPE" to it.shape, "SYNC" to if (it.sync) 1 else 0) }
             FX -> listOf("FX BUS" to fxIndex + 1, "SEND %" to (t.fxSends[fxIndex] * 100).roundToInt(),
-                "MIX %" to (t.fxMix[fxIndex] * 100).roundToInt(), "ENABLED" to if (s.fxEnabled[fxIndex]) 1 else 0)
+                "UNITY %" to 100, "ENABLED" to if (s.fxEnabled[fxIndex]) 1 else 0)
             ARP -> t.arpConfig.let { if (arpPage == 0) listOf("MODE" to it.mode.ordinal, "OCT+3" to it.octaves + 3,
                 "LATCH" to if (it.isLatched) 1 else 0, "RATE x2" to (it.arpRate * 2).roundToInt())
                 else listOf("INV+2" to it.inversion + 2, "PROB %" to (it.probability * 100).roundToInt(),

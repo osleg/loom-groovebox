@@ -17,3 +17,6 @@ CXX="${CXX:-c++}"
 "$CXX" -std=c++17 -O2 -I"$ROOT/composeApp/native" \
     "$HERE/pattern_length.cpp" "$BUILD/core.o" -o "$BUILD/pattern_length"
 "$BUILD/pattern_length"
+"$CXX" -std=c++17 -O2 -I"$ROOT/composeApp/native" \
+    "$HERE/expanded_controls.cpp" "$BUILD/core.o" -o "$BUILD/expanded_controls"
+"$BUILD/expanded_controls"

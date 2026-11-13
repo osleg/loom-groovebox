@@ -8,9 +8,9 @@ tools="$sdk/build-tools/35.0.0"
 "$tools/zipalign" -c -P 16 -v 4 "$apk"
 badging=$("$tools/aapt" dump badging "$apk")
 printf '%s\n' "$badging"
-grep -q "package: name='com.groovebox.cafa'" <<< "$badging"
-grep -q "versionName='[0-9.]*-cafa.1'" <<< "$badging"
-grep -q "application-label:'Loom CAFA'" <<< "$badging"
+grep -q "package: name='com.groovebox.cafa.v4'" <<< "$badging"
+grep -q "versionName='[0-9.]*-cafa.4'" <<< "$badging"
+grep -q "application-label:'Loom CAFA v4'" <<< "$badging"
 readelf=("$sdk"/ndk/27.2.12479018/toolchains/llvm/prebuilt/*/bin/llvm-readelf)
 [[ -x "${readelf[0]}" ]] || { echo "NDK llvm-readelf not found" >&2; exit 1; }
 python3 - "$apk" "${readelf[0]}" <<'PY'

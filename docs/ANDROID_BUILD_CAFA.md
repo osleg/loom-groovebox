@@ -1,5 +1,11 @@
 # Loom CAFA Android build
 
+For the v4 reconstruction release, the application ID is `com.groovebox.cafa.v4`,
+label **Loom CAFA v4**, version `3.2.19-cafa.4`, code 390. It installs separately
+from v3 because the original debug signing key did not survive the workspace
+reset. Do not uninstall the older app. Export/import projects explicitly.
+The baseline identity description below is retained as historical context.
+
 Source fork baseline: `9937566f052fcceeceba1e8b0004a70e1b557adc`.
 License: GPL-3.0, retained in `LICENSE.md`. Distribute matching complete source with the APK.
 

@@ -1,0 +1,1 @@
+PASS normal output; select/mute/unmute; actual-route mismatch; error latch; stop/enable/restart; missing device; wrong device/rate; open failure; explicit normal restore

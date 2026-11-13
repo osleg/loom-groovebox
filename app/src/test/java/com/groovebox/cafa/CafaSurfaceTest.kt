@@ -155,13 +155,14 @@ class CafaSurfaceTest {
         r.input(); assertEquals(changed,r.state.tracks[0].steps[0]); assertTrue(changed.active)
     }
     @Test fun heldGestureCancelsOnTrackPageBankAndDisconnect() {
-        for(action in 0..3) {
+        for(action in 0..4) {
             val r=Rig(); r.baseline(); r.surface.choosePage(CafaSurface.SEQ); r.input(keys=1)
             when(action) {
                 0 -> r.state=r.state.copy(selectedTrackIndex=7)
                 1 -> r.surface.choosePage(CafaSurface.ENV)
                 2 -> r.input(keys=1,encoder=2,delta=1)
-                else -> r.surface.reset()
+                3 -> r.surface.reset()
+                else -> r.state=r.state.copy(currentSequencerBank=1,tracks=r.state.tracks.map { it.copy(patternLength=64) })
             }
             r.input(); assertTrue(r.engine.steps.isEmpty())
         }
@@ -182,12 +183,12 @@ class CafaSurfaceTest {
         val r=Rig(); r.baseline(); r.input(buttons=1)
         r.surface.knob(0,17); r.surface.knob(1,25); r.surface.knob(2,60); r.surface.knob(3,-1)
         assertEquals(17,r.surface.fxIndex)
-        assertEquals(Triple(0,2171,.6f),r.engine.parameters.last())
-        assertEquals(.25f,r.state.tracks[0].fxSends[17],0f); assertEquals(.6f,r.state.tracks[0].fxMix[17],0f)
+        assertEquals(Triple(0,2170,.25f),r.engine.parameters.last())
+        assertEquals(.25f,r.state.tracks[0].fxSends[17],0f); assertEquals(0f,r.state.tracks[0].fxMix[17],0f)
         assertEquals(0f,r.state.tracks[1].fxSends[17],0f); assertEquals(0f,r.state.tracks[0].fxSends[0],0f)
         assertFalse(r.state.fxEnabled[17]); assertEquals(17 to false,r.engine.bypass.last())
         r.state=r.state.copy(tracks=r.state.tracks.mapIndexed { i,t -> if(i==0)t.copy(fxMix=t.fxMix.mapIndexed { n,v -> if(n==17).42f else v }) else t })
-        assertEquals(42,Protocol.u14(r.surface.snapshot(),88))
+        assertEquals(100,Protocol.u14(r.surface.snapshot(),88)); assertTrue(r.notice.contains("unity"))
     }
     @Test fun arpPagesPreserveRhythmsAndUseNativeRateValues() {
         val r=Rig(); r.baseline(); r.input(buttons=1 shl 8)

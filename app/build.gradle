@@ -14,11 +14,11 @@ android {
         def versionProps = new Properties()
         versionProps.load(new FileInputStream(versionPropsFile))
 
-        applicationId "com.groovebox.cafa"
+        applicationId "com.groovebox.cafa.v4"
         minSdk 26
         targetSdk 35
         versionCode versionProps['VERSION_CODE'].toInteger()
-        versionName versionProps['VERSION_NAME'] + '-cafa.1'
+        versionName versionProps['VERSION_NAME'] + '-cafa.4'
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
