@@ -306,4 +306,16 @@ class CafaSurfaceTest {
         assertNotEquals(old,Protocol.u14(r.surface.snapshot(),152))
     }
 
+    @Test fun customAdapterIdentityBelongsToEachTrack() {
+        val r=Rig(); r.state=r.state.copy(tracks=r.state.tracks.map { it.copy(engineType=EngineType.SUBTRACTIVE) })
+        r.baseline(); r.surface.choosePage(CafaSurface.SOUND)
+        r.surface.catalog.register(CafaCatalog.Entry("custom","CUSTOM",EngineType.SUBTRACTIVE,{_,_->emptyList()}))
+        r.input(encoder=2,delta=100)
+        assertEquals("CUSTOM",String(r.surface.snapshot(),20,16).trim())
+        r.input(encoder=1,delta=1)
+        assertEquals("SUBTRACTIVE",String(r.surface.snapshot(),20,16).trim())
+        r.input(encoder=1,delta=-1)
+        assertEquals("CUSTOM",String(r.surface.snapshot(),20,16).trim())
+    }
+
 }

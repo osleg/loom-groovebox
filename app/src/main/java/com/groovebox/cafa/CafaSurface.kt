@@ -43,7 +43,7 @@ class CafaSurface(
     }
     val catalog = CafaCatalog()
     private var catalogBank = 0
-    private var selectedEntry: String? = null
+    private val selectedEntries = arrayOfNulls<String>(8)
     private var catalogContext = ""
     private var catalogEpoch = 1
     init {
@@ -57,8 +57,8 @@ class CafaSurface(
     }
     private fun catalogEntry(t: TrackState): CafaCatalog.Entry {
         val entries = catalog.list()
-        return entries.firstOrNull { it.id == selectedEntry && it.backend == t.engineType }
-            ?: entries.first { it.backend == t.engineType }.also { selectedEntry = it.id }
+        return entries.firstOrNull { it.id == selectedEntries[read().selectedTrackIndex] && it.backend == t.engineType }
+            ?: entries.first { it.backend == t.engineType }.also { selectedEntries[read().selectedTrackIndex] = it.id }
     }
     private fun syncCatalog(s: GrooveboxState, t: TrackState) {
         val entry = catalogEntry(t)
@@ -74,7 +74,7 @@ class CafaSurface(
         for (k in heldNotes.indices) if (heldNotes[k] >= 0) { engine.noteOff(heldTracks[k], heldNotes[k]); heldNotes[k] = -1 }
         heldSteps.fill(null)
         engine.selectEngine(s.selectedTrackIndex, next.backend); next.activate(s.selectedTrackIndex)
-        selectedEntry = next.id; catalogBank = 0
+        selectedEntries[s.selectedTrackIndex] = next.id; catalogBank = 0
         replaceTrack(s, t.copy(engineType = next.backend))
     }
     private var buttons = 0

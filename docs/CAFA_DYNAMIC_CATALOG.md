@@ -23,6 +23,9 @@ changing descriptors does not require a new Skiff build. The tests register an
 unknown ORBIT CUSTOM entry at runtime, browse it from hardware, select it, page
 its nine controls, and edit parameter 908 through the real surface model.
 
+Custom adapter IDs are remembered per track for the lifetime of the surface.
+Persisting these IDs in saved projects is not implemented.
+
 This is not a dynamic native DSP binary loader. Loom itself still has its existing
 compiled EngineType/native backends. No filesystem sample/preset discovery,
 plugin package installation, or universal sound-file loader is implemented here.
@@ -58,7 +61,7 @@ remain in use. No standalone FM1 project writes or USB audio layout changes.
 Run tests/run-cafa-protocol.sh for pure Java framing/session checks. Run
 tests/run-cafa-surface.sh with KOTLINC, JUNIT_JAR and HAMCREST_JAR set for the real
 Kotlin GrooveboxState/CafaSurface tests without Android. These export actual v5
-fixtures to build/cafa-model-vectors for the matching firmware tests. Results: 17,083 Java framing/session assertions, 24 real Kotlin surface tests,
+fixtures to build/cafa-model-vectors for the matching firmware tests. Results: 17,083 Java framing/session assertions, 25 real Kotlin surface tests,
 and 1,976 real Java/C firmware mailbox interoperability checks passed. Existing
 native AudioEngineCore and audio-route regression suites also passed.
 
