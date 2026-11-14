@@ -46,7 +46,7 @@ class CafaSurfaceTest {
         val surface = CafaSurface({state}, {state=it}, engine, {state=state.copy(selectedTrackIndex=it)}, {saved=true}, {notice=it})
         var serial = 0
         fun input(buttons: Int = 0, keys: Long = 0, encoder: Int = -1, delta: Int = 0): Boolean {
-            val p = ByteArray(20); Protocol.put14(p,0,buttons); Protocol.put28(p,2,keys)
+            val p = ByteArray(22); Protocol.put14(p,20,Protocol.u14(surface.snapshot(),152)); Protocol.put14(p,0,buttons); Protocol.put28(p,2,keys)
             for(i in 0..6) Protocol.put14(p,6+i*2,8192 + if(i==encoder) delta else 0)
             serial=(serial+1) and 16383
             return surface.input(serial,p)
@@ -71,7 +71,7 @@ class CafaSurfaceTest {
     }
     @Test fun duplicateAndGapInputsDoNotChangeTheModel() {
         val r=Rig(); r.baseline(); r.input(encoder=1,delta=1)
-        val data=ByteArray(20); for(i in 0..6) Protocol.put14(data,6+i*2,8192)
+        val data=ByteArray(22); for(i in 0..6) Protocol.put14(data,6+i*2,8192)
         Protocol.put14(data,8,8193)
         assertTrue(r.surface.input(r.serial,data)); assertEquals(1,r.state.selectedTrackIndex)
         assertFalse(r.surface.input(r.serial+2,data)); assertEquals(1,r.state.selectedTrackIndex)
@@ -219,7 +219,7 @@ class CafaSurfaceTest {
                 3 to CafaSurface.LFO,4 to CafaSurface.SOUND,5 to CafaSurface.MIX,6 to CafaSurface.HOME,
                 8 to CafaSurface.ARP,9 to CafaSurface.SEQ)) {
             r.input(); r.input(buttons=1 shl button)
-            assertEquals(page,r.surface.page); assertEquals(page,r.surface.snapshot()[1].toInt())
+            assertEquals(page,r.surface.page); assertEquals(if(page == CafaSurface.SOUND) 9 else page,r.surface.snapshot()[1].toInt())
         }
         r.input(); r.input(buttons=1 shl 9); assertEquals(CafaSurface.PATTERN,r.surface.page)
         r.surface.knob(2,-100); assertEquals(-.23f,r.state.swing,0f)
@@ -245,7 +245,7 @@ class CafaSurfaceTest {
             r.state = r.state.copy(selectedTrackIndex = track)
             r.surface.choosePage(page)
             val payload = r.surface.snapshot()
-            assertEquals(track, payload[0].toInt()); assertEquals(page,payload[1].toInt())
+            assertEquals(track, payload[0].toInt()); assertEquals(if(page == CafaSurface.SOUND) 9 else page,payload[1].toInt())
             assertEquals(64,Protocol.u14(payload,3)); assertEquals(48,Protocol.u14(payload,5))
             assertTrue(payload.all { it.toInt() >= 0 })
             java.io.File(directory,"t${track+1}-p$page.syx").writeBytes(Protocol.frame(Protocol.STATE,57,++revision,payload))
@@ -256,4 +256,54 @@ class CafaSurfaceTest {
         }
         java.io.File(directory,"bye.syx").writeBytes(Protocol.frame(Protocol.BYE,57,revision,ByteArray(0)))
     }
+    @Test fun runtimeAdapterBrowsesAndPagesWithoutFirmwareEngineIds() {
+        val r=Rig(); r.baseline(); r.surface.choosePage(CafaSurface.SOUND)
+        var activated = -1
+        r.surface.catalog.register(CafaCatalog.Entry("user.orbit", "ORBIT CUSTOM", EngineType.SUBTRACTIVE,
+            { _, _ -> List(9) { CafaCatalog.Control(900+it,"ORB$it",.25f) } }, { activated=it }))
+        r.input(encoder=2,delta=100)
+        assertEquals(0,activated)
+        var b=r.surface.snapshot(); assertEquals(9,b[1].toInt())
+        assertEquals(11,Protocol.u14(b,98)); assertEquals(10,Protocol.u14(b,96))
+        assertEquals("ORBIT CUSTOM",String(b,20,16).trim())
+        assertEquals(3,Protocol.u14(b,94))
+        r.input(encoder=0,delta=2); b=r.surface.snapshot(); assertEquals(2,Protocol.u14(b,92))
+        r.input(encoder=3,delta=10)
+        assertEquals(908,r.engine.parameters.last().second)
+        assertEquals(.35f,r.engine.parameters.last().third,.0001f)
+        assertEquals(0,r.surface.snapshot()[149].toInt())
+    }
+    @Test fun staleContextReleasesNotesButCannotEditDifferentEngine() {
+        val r=Rig(); r.baseline(); r.surface.choosePage(CafaSurface.SOUND)
+        r.input(keys=1); val old=Protocol.u14(r.surface.snapshot(),152)
+        r.input(keys=1,encoder=2,delta=1)
+        val p=ByteArray(22); for(i in 0..6) Protocol.put14(p,6+i*2,8192)
+        Protocol.put14(p,12,8292); Protocol.put14(p,20,old)
+        assertTrue(r.surface.input(++r.serial,p))
+        assertTrue(r.engine.parameters.isEmpty()); assertTrue(r.engine.off.isNotEmpty())
+    }
+    @Test fun navigationAndKnobInOneScanCannotEditNewBank() {
+        val r=Rig(); r.baseline(); r.surface.choosePage(CafaSurface.SOUND)
+        val p=ByteArray(22); Protocol.put14(p,20,Protocol.u14(r.surface.snapshot(),152))
+        for(i in 0..6) Protocol.put14(p,6+i*2,8192)
+        Protocol.put14(p,10,8193); Protocol.put14(p,12,8292)
+        assertTrue(r.surface.input(++r.serial,p)); assertTrue(r.engine.parameters.isEmpty())
+    }
+
+    @Test(expected = IllegalArgumentException::class) fun oversizedBankCatalogIsRejectedInsteadOfTruncated() {
+        val r=Rig(); r.surface.catalog.register(CafaCatalog.Entry("SUBTRACTIVE","TOO LARGE",EngineType.SUBTRACTIVE,
+            { _, _ -> List(65533) { CafaCatalog.Control(it,"X") } }))
+        r.surface.snapshot()
+    }
+    @Test fun catalogMetadataChangesInvalidateOldInputToken() {
+        val r=Rig(); r.baseline(); r.surface.choosePage(CafaSurface.SOUND)
+        val old=Protocol.u14(r.surface.snapshot(),152)
+        r.surface.catalog.register(CafaCatalog.Entry("SUBTRACTIVE","NEW",EngineType.SUBTRACTIVE,
+            { _, _ -> listOf(CafaCatalog.Control(999,"NEW",.5f)) }))
+        val p=ByteArray(22); for(i in 0..6) Protocol.put14(p,6+i*2,8192)
+        Protocol.put14(p,12,8193); Protocol.put14(p,20,old)
+        assertTrue(r.surface.input(++r.serial,p)); assertTrue(r.engine.parameters.isEmpty())
+        assertNotEquals(old,Protocol.u14(r.surface.snapshot(),152))
+    }
+
 }

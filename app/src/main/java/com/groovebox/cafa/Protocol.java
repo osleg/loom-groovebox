@@ -7,7 +7,7 @@ import java.util.Arrays;
 public final class Protocol {
     public static final int HELLO = 1, ACK = 2, STATE = 3, HEARTBEAT = 4, BYE = 5, INPUT = 6;
     public static final int NONE = 16383;
-    public static final int VERSION = 4; // Expanded surface; Loom envelopes keep their own timing curves.
+    public static final int VERSION = 5; // Expanded surface; Loom envelopes keep their own timing curves.
     private Protocol() {}
 
     public static int u14(byte[] bytes, int at) {
@@ -33,11 +33,11 @@ public final class Protocol {
         return frame(VERSION, command, session, serial, payload);
     }
     public static byte[] frame(int version, int command, int session, int serial, byte[] payload) {
-        if (version < 1 || version > 4) throw new IllegalArgumentException("Unsupported protocol version");
+        if (version < 1 || version > 5) throw new IllegalArgumentException("Unsupported protocol version");
         if (session <= 0 || session > 16383 || serial < 0 || serial > 16383) {
             throw new IllegalArgumentException("Invalid session or serial");
         }
-        if (payload.length > 128) throw new IllegalArgumentException("Payload too large");
+        if (payload.length > 156) throw new IllegalArgumentException("Payload too large");
         byte[] bytes = new byte[11 + payload.length];
         bytes[0] = (byte) 0xf0;
         bytes[1] = 0x7d; bytes[2] = 0x43; bytes[3] = 0x41; bytes[4] = (byte) version;
@@ -67,7 +67,7 @@ public final class Protocol {
     }
     public interface Receiver { void receive(Frame frame); }
     public static final class Decoder {
-        private final byte[] buffer = new byte[140];
+        private final byte[] buffer = new byte[168];
         private int count;
         private final Receiver receiver;
         public Decoder(Receiver receiver) { this.receiver = receiver; }
@@ -84,7 +84,7 @@ public final class Protocol {
             if (count == 0) return;
             if (value == 0xf7) {
                 if (count >= 10 && buffer[1] == 0x7d && buffer[2] == 0x43 &&
-                        buffer[3] == 0x41 && (buffer[4] >= 1 && buffer[4] <= 4) && u14(buffer, 6) != 0) {
+                        buffer[3] == 0x41 && (buffer[4] >= 1 && buffer[4] <= 5) && u14(buffer, 6) != 0) {
                     buffer[count++] = (byte) value;
                     Frame frame = new Frame(buffer, count);
                     count = 0;

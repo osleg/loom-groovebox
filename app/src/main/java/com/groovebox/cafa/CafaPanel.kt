@@ -30,10 +30,10 @@ fun CafaPanel(connection: CafaConnection) {
         val outputs = remember(refresh) { connection.audioDevices() }
         var midiId by remember { mutableStateOf<Int?>(null) }
         var audioId by remember { mutableStateOf<Int?>(null) }
-        AlertDialog(onDismissRequest = { show = false }, title = { Text("Loom + FM1 · v4 controls") },
+        AlertDialog(onDismissRequest = { show = false }, title = { Text("Loom + FM1 · v5 controls") },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
-                    Text("Choose the FM1 USB MIDI and audio outputs. Requires matching CAFA v4 firmware. All eight Loom tracks are selectable; patterns remain 4–64 steps. Install this app alongside the older CAFA app; projects are not imported automatically.")
+                    Text("Choose the FM1 USB MIDI and audio outputs. Requires matching CAFA v5 firmware. All eight Loom tracks are selectable; patterns remain 4–64 steps. Install this app alongside the older CAFA app; projects are not imported automatically.")
                     Spacer(Modifier.height(8.dp))
                     Text("USB MIDI")
                     devices.forEach { info ->

@@ -1,3 +1,5 @@
+**v5 dynamic catalog proof of concept:** [implementation, hardware controls, validation and limits](docs/CAFA_DYNAMIC_CATALOG.md). Requires matching v5 firmware; this branch is not hardware-qualified.
+
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
 # Loom CAFA: FM1 integration prototype 1
 

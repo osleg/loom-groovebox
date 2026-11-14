@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 package com.groovebox.cafa;
 
-/** Bounded CAFA v4 lease. Port-open never implies firmware takeover or audible output. */
+/** Bounded CAFA v5 lease. Port-open never implies firmware takeover or audible output. */
 public final class CafaSession {
     public interface Host {
         void send(byte[] bytes) throws Exception;
@@ -45,7 +45,7 @@ public final class CafaSession {
     public void tick(long now) {
         if (!open) return;
         if (now - lastAck >= 1500) {
-            fail(waiting ? "No CAFA v4 firmware reply. Select matching FM1 MIDI/USB audio endpoints."
+            fail(waiting ? "No CAFA v5 firmware reply. Select matching FM1 MIDI/USB audio endpoints."
                          : "FM1 stopped acknowledging state. Output muted; reconnect to continue.");
             return;
         }
@@ -54,7 +54,7 @@ public final class CafaSession {
             if (now - lastFrame >= 250) { send(Protocol.HELLO, 0, new byte[0]); lastFrame = now; }
         } else if (now - lastFrame >= 34) {
             byte[] state = host.snapshot();
-            if (state.length != 92) { fail("Invalid surface snapshot; output stopped."); return; }
+            if (state.length != 156) { fail("Invalid surface snapshot; output stopped."); return; }
             sentStates++; revision = (int)(sentStates & 16383);
             send(Protocol.STATE, revision, state); lastFrame = now;
         }

@@ -14,6 +14,7 @@ class CafaSurface(
     private val notice: (String) -> Unit
 ) {
     interface Engine {
+        fun selectEngine(track: Int, type: EngineType) {}
         fun noteOn(track: Int, note: Int)
         fun noteOff(track: Int, note: Int)
         fun playing(value: Boolean)
@@ -39,6 +40,42 @@ class CafaSurface(
         const val LFO = 6; const val ARP = 7; const val PATTERN = 8
         val ARP_RATES = listOf(.5f, 1f, 2f, 4f, 8f)
         val WHITE_KEYS = intArrayOf(0, 2, 4, 6, 7, 9, 11, 12, 14, 16, 18, 19, 21, 23, 24, 26)
+    }
+    val catalog = CafaCatalog()
+    private var catalogBank = 0
+    private var selectedEntry: String? = null
+    private var catalogContext = ""
+    private var catalogEpoch = 1
+    init {
+        for (type in EngineType.values()) catalog.register(CafaCatalog.Entry(type.name, type.name.replace('_', ' '), type, { state, track ->
+            // Reuse the user's live phone control assignments, not firmware engine tables.
+            val assigned = (state.engineTypeStripAssignments[type].orEmpty() + state.engineTypeKnobAssignments[type].orEmpty())
+                .filter { it.targetType == 1 }.distinctBy { it.targetId }
+            if (assigned.isNotEmpty()) assigned.map { CafaCatalog.Control(it.targetId, it.parameterName) }
+            else soundParams(track).map { CafaCatalog.Control(it.id, it.label, it.fallback) }
+        }))
+    }
+    private fun catalogEntry(t: TrackState): CafaCatalog.Entry {
+        val entries = catalog.list()
+        return entries.firstOrNull { it.id == selectedEntry && it.backend == t.engineType }
+            ?: entries.first { it.backend == t.engineType }.also { selectedEntry = it.id }
+    }
+    private fun syncCatalog(s: GrooveboxState, t: TrackState) {
+        val entry = catalogEntry(t)
+        val controls = entry.controls(s,t)
+        require(controls.size <= 65532) { "Catalog exceeds 16383 four-control banks" }
+        catalogBank = catalogBank.coerceIn(0, ((controls.size + 3) / 4 - 1).coerceAtLeast(0))
+        val context = "${s.selectedTrackIndex}:$page:${entry.id}:$catalogBank:${catalog.generation}:${controls}"
+        if (context != catalogContext) { catalogContext = context; catalogEpoch = (catalogEpoch + 1) and 16383 }
+    }
+    private fun browseEngine(delta: Int) {
+        val s = state(); val t = s.tracks[s.selectedTrackIndex]; val entries = catalog.list()
+        val next = entries[(entries.indexOf(catalogEntry(t)) + delta).coerceIn(0, entries.lastIndex)]
+        for (k in heldNotes.indices) if (heldNotes[k] >= 0) { engine.noteOff(heldTracks[k], heldNotes[k]); heldNotes[k] = -1 }
+        heldSteps.fill(null)
+        engine.selectEngine(s.selectedTrackIndex, next.backend); next.activate(s.selectedTrackIndex)
+        selectedEntry = next.id; catalogBank = 0
+        replaceTrack(s, t.copy(engineType = next.backend))
     }
     private var buttons = 0
     private var keys = 0L
@@ -80,6 +117,7 @@ class CafaSurface(
         val t = s.tracks[s.selectedTrackIndex]
         val context = "${s.selectedTrackIndex}:${t.engineType}:${lane(t)}:${bank(s,t)}:${t.patternLength}"
         if (context != stepContext) { heldSteps.fill(null); stepContext = context }
+        syncCatalog(s, t)
         return s
     }
     fun choosePage(value: Int) {
@@ -97,7 +135,7 @@ class CafaSurface(
     private fun bank(s: GrooveboxState, t: TrackState) = s.currentSequencerBank.coerceIn(0, (t.patternLength.coerceIn(1, 64) - 1) / 16)
 
     fun input(serial: Int, payload: ByteArray): Boolean {
-        if (payload.size != 20 || payload.any { it.toInt() < 0 }) return false
+        if (payload.size != 22 || payload.any { it.toInt() < 0 }) return false
         if (!first && serial == lastSerial) return true
         if (serial != ((lastSerial + 1) and 16383)) return false
         val nextButtons = Protocol.u14(payload, 0)
@@ -110,6 +148,7 @@ class CafaSurface(
         buttons = nextButtons; keys = nextKeys; lastSerial = serial
         if (initial) { first = false; pressed = 0; down = 0 }
         state() // Cancel pending gestures if the touchscreen changed track/page.
+        val staleContext = Protocol.u14(payload,20) != catalogEpoch
         // Cancellation wins when a release and navigation share one hardware scan.
         val familyButtons = (1 shl 0) or (1 shl 1) or (1 shl 2) or (1 shl 3) or
             (1 shl 4) or (1 shl 5) or (1 shl 6) or (1 shl 8) or (1 shl 9)
@@ -122,11 +161,13 @@ class CafaSurface(
             }
             heldSteps[k]?.let { h ->
                 val s = state(); val t = s.tracks[s.selectedTrackIndex]
-                if (!h.edited && page == SEQ && h.track == s.selectedTrackIndex && h.lane == lane(t))
+                if (!staleContext && !h.edited && page == SEQ && h.track == s.selectedTrackIndex && h.lane == lane(t))
                     toggle(s, t, h.index)
             }
             heldSteps[k] = null
         }
+        if (staleContext) { heldSteps.fill(null); return true }
+        val inputEpoch = catalogEpoch
         for ((bit, target) in listOf(0 to FX, 1 to SOUND, 2 to ENV, 3 to LFO,
                 4 to SOUND, 5 to MIX, 6 to HOME, 8 to ARP, 9 to SEQ)) {
             if ((pressed and (1 shl bit)) != 0) {
@@ -152,6 +193,8 @@ class CafaSurface(
             heldSteps.fill(null)
             selectTrack((s.selectedTrackIndex + trackDelta).coerceIn(0, minOf(7, s.tracks.lastIndex)))
         }
+        state()
+        if (catalogEpoch != inputEpoch) down = 0L
         for (k in 0..26) if ((down and (1L shl k)) != 0L) {
             val s = state(); val t = s.tracks[s.selectedTrackIndex]
             val white = WHITE_KEYS.indexOf(k)
@@ -177,17 +220,21 @@ class CafaSurface(
                     LFO -> lfoIndex = (lfoIndex + d).coerceIn(0, s.lfos.lastIndex)
                     FX -> fxIndex = (fxIndex + d).coerceIn(0, minOf(t.fxSends.lastIndex, t.fxMix.lastIndex, s.fxEnabled.lastIndex))
                     ARP -> arpPage = (arpPage + d).coerceIn(0, 1)
+                    SOUND -> { val count = catalogEntry(t).controls(s,t).size; catalogBank = (catalogBank + d).coerceIn(0, ((count+3)/4-1).coerceAtLeast(0)) }
                     else -> Unit // SELECT stays within the physical button's family.
                 }
-                2 -> if (page == SEQ) {
+                2 -> if (catalogEpoch != inputEpoch) {
+                    // Navigation in this scan invalidates its old-context PRESET intent.
+                } else if (page == SEQ) {
                     heldSteps.fill(null)
                     write(s.copy(currentSequencerBank = (bank(s, t) + d).coerceIn(0, (t.patternLength.coerceIn(1, 64) - 1) / 16)))
+                } else if (page == SOUND && catalogEpoch == inputEpoch) { browseEngine(d)
                 } else if (multi(t)) {
                     val selected = (t.selectedFmDrumInstrument + d).coerceIn(0, lastLane(t))
                     engine.lane(s.selectedTrackIndex, selected)
                     replaceTrack(s, t.copy(selectedFmDrumInstrument = selected))
                 } else notice("Preset loading remains on the phone; existing sounds are unchanged.")
-                else -> knob(e - 3, d)
+                else -> { state(); if (catalogEpoch == inputEpoch) knob(e - 3, d) }
             }
         }
         return true
@@ -249,7 +296,9 @@ class CafaSurface(
             EngineType.WAVETABLE -> listOf(454, 455, 456, 457)
             else -> emptyList()
         }.mapIndexed { i, id -> Param(id, listOf("ATK %", "DEC %", "SUS %", "REL %")[i], listOf(.01f, .5f, 1f, .2f)[i]) }
-        return when (t.engineType) {
+        return soundParams(t)
+    }
+    private fun soundParams(t: TrackState): List<Param> = when (t.engineType) {
             EngineType.SUBTRACTIVE -> listOf(Param(112, "CUTOFF", 1f), Param(113, "RESO"), Param(100, "ATK %", .01f), Param(103, "REL %", .2f))
             EngineType.FM -> listOf(Param(151, "CUTOFF", 1f), Param(157, "BRIGHT", .5f), Param(100, "ATK %", .01f), Param(103, "REL %", .2f))
             EngineType.SAMPLER -> listOf(Param(303, "CUTOFF", 1f), Param(304, "RESO"), Param(310, "ATK %", .01f), Param(313, "REL %", .2f))
@@ -261,7 +310,6 @@ class CafaSurface(
             EngineType.ANALOG_DRUM -> listOf(Param(600 + lane(t) * 10, "DECAY", .5f), Param(601 + lane(t) * 10, "TONE", .5f))
             else -> emptyList()
         }
-    }
     fun knob(index: Int, delta: Int) {
         if (index !in 0..3 || delta == 0) return
         val s = state(); val i = s.selectedTrackIndex; val t = s.tracks[i]
@@ -327,7 +375,12 @@ class CafaSurface(
                 }
                 engine.arp(i, v); replaceTrack(s, t.copy(arpConfig = v))
             }
-            SOUND, ENV -> {
+            SOUND -> {
+                val p = catalogEntry(t).controls(s,t).getOrNull(catalogBank*4+index) ?: return
+                val v = (p.value(t) + delta*p.step).coerceIn(p.minimum,p.maximum)
+                engine.parameter(i,p.id,v); replaceTrack(s,t.copy(parameters=t.parameters+(p.id to v)))
+            }
+            ENV -> {
                 val p = params(t).getOrNull(index)
                 if (p == null) { notice("This engine's controls remain available on the phone."); return }
                 val v = ((t.parameters[p.id] ?: p.fallback) + delta / 100f).coerceIn(0f, 1f)
@@ -346,10 +399,10 @@ class CafaSurface(
         val s = state(); val t = s.tracks[s.selectedTrackIndex]
         lfoIndex = lfoIndex.coerceIn(0, s.lfos.lastIndex)
         fxIndex = fxIndex.coerceIn(0, minOf(t.fxSends.lastIndex, t.fxMix.lastIndex, s.fxEnabled.lastIndex))
-        require(s.tempo.isFinite() && s.tempo in 12f..300f) { "Tempo outside CAFA v4 range" }
+        require(s.tempo.isFinite() && s.tempo in 12f..300f) { "Tempo outside CAFA v5 range" }
         val length = t.patternLength.coerceIn(1, 64); val start = bank(s, t) * 16
         val head = if (s.isPlaying) engine.playhead(s.selectedTrackIndex, lane(t)).takeIf { it in 0 until length } ?: Protocol.NONE else Protocol.NONE
-        val b = ByteArray(92)
+        val b = ByteArray(156)
         b[0] = s.selectedTrackIndex.toByte(); b[1] = page.toByte()
         b[2] = ((if (s.isPlaying) 1 else 0) or (if (s.isRecording) 2 else 0) or (if (t.isMuted) 4 else 0) or ((octave + 3) shl 3)).toByte()
         Protocol.put14(b, 3, length); Protocol.put14(b, 5, start); Protocol.put14(b, 7, head); Protocol.put14(b, 9, s.tempo.roundToInt().coerceIn(12, 300))
@@ -392,6 +445,22 @@ class CafaSurface(
         for (i in 0..3) {
             val v = values.getOrNull(i) ?: ("" to 0)
             Protocol.text(b, 52 + i * 8, 8, v.first); Protocol.put14(b, 84 + i * 2, v.second.coerceIn(0, 16383))
+        }
+        Protocol.put14(b,152,catalogEpoch)
+        if (page == SOUND) {
+            val entry = catalogEntry(t); val entries = catalog.list(); val controls = entry.controls(s,t)
+            b[1] = 9
+            Protocol.text(b,20,16,entry.name)
+            Protocol.text(b,36,16,"CONTROLS ${catalogBank+1}")
+            Protocol.put14(b,92,catalogBank); Protocol.put14(b,94,((controls.size+3)/4).coerceAtLeast(1))
+            Protocol.put14(b,96,entries.indexOf(entry)); Protocol.put14(b,98,entries.size)
+            for (i in 0..3) {
+                val control = controls.getOrNull(catalogBank*4+i)
+                Protocol.text(b,52+i*8,8,control?.label ?: "")
+                Protocol.put14(b,84+i*2,control?.normalized(t) ?: 0)
+                Protocol.text(b,100+i*12,12,control?.display(t) ?: "")
+                b[148+i] = (if (control == null) 0 else if (control.choices.isEmpty()) 1 else 2).toByte()
+            }
         }
         return b
     }

@@ -24,8 +24,19 @@ public final class FirmwareLinkTests {
             in = new DataInputStream(process.getInputStream());
             link = new CafaSession(new CafaSession.Host() {
                 public void send(byte[] bytes) { pending.add(bytes); }
-                public byte[] snapshot() { return CafaProtocolTest.state(7,3); }
-                public boolean input(int serial, byte[] data) { return data.length == 20; }
+                public byte[] snapshot() {
+                    byte[] state = CafaProtocolTest.state(7,9);
+                    Protocol.text(state,20,16,"UNSEEN ENGINE");
+                    Protocol.text(state,36,16,"CONTROL PAGE 12");
+                    Protocol.put14(state,92,11); Protocol.put14(state,94,120);
+                    Protocol.put14(state,96,899); Protocol.put14(state,98,900);
+                    for (int i=0;i<4;i++) {
+                        Protocol.text(state,100+i*12,12,"1.23 kHz"); state[148+i]=1;
+                    }
+                    Protocol.put14(state,152,71);
+                    return state;
+                }
+                public boolean input(int serial, byte[] data) { return data.length == 22; }
                 public void reset() { }
                 public void applied() { }
                 public void stopped(String text) { failures.add(text); }
