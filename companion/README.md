@@ -15,7 +15,7 @@ This Android library implements the first layers of the project's Open FM-1 Comp
 
 The library has no dependency on LOOM, Compose, native synthesis or an audio output. LOOM continues to require its explicitly selected USB audio route; moving the transport does not change that policy. Existing firmware, v5 bytes, save feedback and catalog persistence are preserved.
 
-`LegacySurface` intentionally exposes v5 payloads during migration. New instrument integrations can implement `instrument.InstrumentAdapter` and use `InstrumentController` with `OpenMidiConnection`, following the [open contract draft](OPEN_PROTOCOL.md). The [reference app](../instrument-demo/README.md) demonstrates this without importing LOOM's model, sequencer or native engine.
+`LegacySurface` intentionally exposes v5 payloads during migration. New instrument integrations can implement `instrument.InstrumentAdapter` and use `InstrumentController` with `OpenMidiConnection`, following the [open contract draft](OPEN_PROTOCOL.md). The separate [FM-1 Instrument app](https://github.com/osleg/FM-1-Instrument) demonstrates this without importing LOOM's model, sequencer or native engine.
 
 ## Instrument application adapter
 
@@ -108,7 +108,6 @@ Use the repository's pinned Gradle wrapper and documented Android environment:
 
 ```sh
 ./gradlew :companion:testDebugUnitTest :companion:lintDebug :companion:assembleDebug :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
-./gradlew :instrument-demo:testDebugUnitTest :instrument-demo:lintDebug :instrument-demo:assembleDebug
 bash tests/run-cafa-protocol.sh
 ```
 
@@ -116,4 +115,4 @@ The workspace's `tools/build-loom.sh` also runs the shared Android and desktop t
 
 Existing protocol/session tests preserve legacy behavior; LOOM surface tests exercise the shared controller through real model edits and v5 snapshots. `OpenSessionTest` covers the new host boundary. The workspace's `tools/verify-open-protocol.sh` connects the production Java session to Skiff's actual USB mailbox, ownership, display and input code, using a host HAL. Run it after `tools/build-skiff.sh` generates firmware tables.
 
-Shared-controller tests use a small independent instrument model with no tracks, sequencer or audio route. The separate `instrument-demo` app uses the public adapter and controller with its own oscillator; its unit tests check real PCM output, stale edits, original-note release and voice limits. The workspace's `tools/verify-instrument-apk.sh` checks its independent package identity, signature, alignment and absence of native engine dependencies. These checks establish implementation reuse, while Android MIDI port lifecycle and physical USB/audio operation still require phone/FM-1 acceptance.
+Shared-controller tests use a small independent instrument model with no tracks, sequencer or audio route. The separate [FM-1 Instrument app](https://github.com/osleg/FM-1-Instrument) uses the public adapter and controller; build and acceptance checks for that app live in its repository. Android MIDI port lifecycle and physical USB/audio operation still require phone/FM-1 acceptance.

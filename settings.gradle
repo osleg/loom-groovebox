@@ -16,4 +16,3 @@ rootProject.name = "Groovebox"
 include ':app'
 include ':composeApp'
 include ':companion'
-include ':instrument-demo'

@@ -11,5 +11,4 @@ export GRADLE_USER_HOME
 ./gradlew --no-daemon --console=plain --max-workers=2 \
   -Dorg.gradle.jvmargs=-Xmx2g -Pkotlin.compiler.execution.strategy=in-process \
   :companion:testDebugUnitTest :companion:lintDebug :companion:assembleDebug \
-  :instrument-demo:testDebugUnitTest :instrument-demo:lintDebug :instrument-demo:assembleDebug \
   :composeApp:testDebugUnitTest :app:testDebugUnitTest :app:lintDebug :app:assembleDebug "$@"
