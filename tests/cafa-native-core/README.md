@@ -19,6 +19,12 @@ smoke test's C++17/O2 configuration. It compiles the production
    then four melodic tracks plus four analog-drum tracks, including all 16 drum
    lanes. A separate check triggers distinct MIDI notes on each of eight
    subtractive tracks and requires finite, nonzero audio.
+4. `snapshot_reads.cpp`, which checks unavailable startup and queued snapshots,
+   nonfocused track parameters and steps, valid zero values, and audible output
+   after preserving saved settings during startup.
+5. `mixing.cpp`, which exercises production DSP with two additive solo tracks,
+   then mutes each track and checks that the remaining mix becomes silent.
+6. `note_gates_locks.cpp`, which renders a chord to check distinct note lifetimes and checks complete lock replacement and clearing on melodic and routed drum steps.
 
 The tests use the actual DSP/core, not mocks. All generated objects and binaries
 are temporary and removed after the run. No Android SDK is required, and no

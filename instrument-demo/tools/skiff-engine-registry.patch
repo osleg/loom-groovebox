@@ -1,0 +1,111 @@
+--- a/firmware/src/core.h
++++ b/firmware/src/core.h
+@@ -86,7 +86,7 @@
+ #define FELUCCA_SLICE 1          /* the SLICE engine (eng_slice.c), engine 13; FELUCCA_SLICE=0 builds without it */
+ #endif
+ #ifndef FELUCCA_FM4
+-#define FELUCCA_FM4 0            /* the DIGITAL engine (eng_digital.c, four-operator FM): kept in the tree, not built
++#define FELUCCA_FM4 1            /* the DIGITAL engine (eng_digital.c, four-operator FM): kept in the tree, not built
+                                   * by default; replaced by FM6, its sounds convert (fm4_convert.c) */
+ #endif
+ #ifndef FELUCCA_LEGACY
+@@ -95,7 +95,8 @@
+                                   * sounds (fm4_convert.c), settings PER1..PER3, 1.0's FM6 bank. Only the converter
+                                   * (web/conv) and its tests build them; 2.0 keeps such a record's bytes (OLD FORMAT) */
+ #endif
+-#define NENGINES 15u             /* (Skiff) DRUM-X (14) after SLICE (13): the other engines keep their numbers */
++#define NENGINES 16u             /* Phone engine IDs append after stock Skiff IDs 0..14. */
++#define ENGI_ATEK303 15u
+ #define ENGI_DIGITAL 1u          /* reserved without FELUCCA_FM4: never selectable (eng_ok), its sounds load as FM6 */
+ #define ENGI_SLICE 13u           /* reserved without FELUCCA_SLICE, as DIGITAL is without FELUCCA_FM4 */
+ #define NENG_SHOWN (NENGINES - !FELUCCA_FM4 - !FELUCCA_SLICE)   /* the engines one can pick: PRESETS, the EDIT layer,
+--- a/firmware/src/engines.c
++++ b/firmware/src/engines.c
+@@ -27,6 +27,8 @@
+ #include "eng_slice.c"
+ #endif
+ 
++#include "atek303/eng_atek303.c"
++
+ /* Skiff: a track runs one engine at a time, and an engine switch fades the old one out before the new one starts
+  * (voice.c engine_block), so a part's engines share one area, as big as the biggest's (PHYS: its 3 slots): ~48 KB for
+  * the four parts instead of ~99 KB. Only the audio interrupt touches it, through the engines' own accessors (their
+@@ -34,6 +36,7 @@
+  * its index, PHYS its model, from zero). Data the main loop writes (FM6's patches, WHEEL's bars) stays out. */
+ typedef union {
+     phys_slot_t phys[PHYS_POLY];
++    atek_part_t atek;
+     gr_part_t grain;
+     drum_lane_t drum[DV_NLANE];
+     drumx_lane_t drumx[DV_NLANE];
+@@ -47,6 +50,7 @@
+ /* (Skiff phase 6) a light track's area (the tracks past NHEAVY): the engines it may play, no PHYS, no GRAIN (their
+  * accessors give it none: a heavy engine forced there is silent); DRUM's lanes the biggest, 1.8 KB */
+ typedef union {
++    atek_part_t atek;
+     drum_lane_t drum[DV_NLANE];
+     drumx_lane_t drumx[DV_NLANE];
+     fm6_note_t fm6[FM6_POLY];
+@@ -95,6 +99,7 @@
+     &ENG_FM4_GONE,               /* 13: reserved (FELUCCA_SLICE=0 builds without SLICE: never offered, eng_ok) */
+ #endif
+     &ENG_DRUMX,                  /* 14 (ENGI_DRUMX, Skiff) */
++    &ENG_ATEK303,                /* 15: app engine, stored in projects and presets */
+ };
+ 
+ /* a track's engine number as an index (the audio paths: a compare, cheaper than % NENGINES; a bad number: 0) */
+@@ -137,6 +142,7 @@
+ #endif
+     10,                          /* DRUM */
+     14,                          /* DRUM-X */
++    ENGI_ATEK303,
+ };
+ 
+ /* the engines one can pick (engine 1 only with FELUCCA_FM4), in ENGINE_ORDER: eng_ok(e), the n-th of them
+--- a/firmware/src/params.c
++++ b/firmware/src/params.c
+@@ -90,7 +90,7 @@
+ #else
+                                              "-",
+ #endif
+-                                             "DRUM-X",
++                                             "DRUM-X", "ATEK303",
+ };
+ 
+ #define PD(l, f, mn, mx, df) {l, 0, mn, mx, df, f, 0}
+--- a/firmware/src/fx.c
++++ b/firmware/src/fx.c
+@@ -925,8 +925,8 @@
+  * DIST / SLICER while it sounds or its tail runs. ENGINES[] order. An estimate: it only steers the split, the sound does
+  * not depend on it */
+ static uint16_t part_cost[NPART];                       /* the last block's, per track */
+-static const uint16_t ENG_VCOST[NENGINES] = {163, 0, 162, 67, 70, 174, 144, 143, 189, 309, 113, 134, 181, 129, 120};
+-_Static_assert(NENGINES == 15, "ENG_VCOST: a cost per engine");
++static const uint16_t ENG_VCOST[NENGINES] = {163, 0, 162, 67, 70, 174, 144, 143, 189, 309, 113, 134, 181, 129, 120, 360};
++_Static_assert(NENGINES == 16, "ENG_VCOST: a cost per engine");
+ #else
+ static int32_t send_c[CTL], send_d[CTL], send_e[CTL], send_r[CTL], wet[CTL], mix_l[CTL], mix_r[CTL];
+ #endif
+--- a/firmware/src/eng_phase.c
++++ b/firmware/src/eng_phase.c
+@@ -305,6 +305,10 @@
+     /* (Skiff phase 9) more for every engine: basses, kits */
+     {"PD BASS", {0, 0, 50, 80, 4, 0, 60, 0}, {0, 60, 60, 25}, 0, 1, FX(5, 0, 5, 10), TAG(PT_BASS)},
+     {"SOFT KEYS", {3, 0, 30, 60, 6, 0, 0, 0}, {0, 85, 30, 60}, 0, 0, FX(0, 40, 20, 40), TAG(PT_KEYS)},
++    /* Original FM-1 Instrument patches. Keep the stock indices above. */
++    {"GLASS PLUCK", {4, 3, 76, 93, 4, 0, 0, 3}, {0, 62, 4, 46}, 0, 0, FX(0, 22, 15, 12), TAG(PT_PLUCK)},
++    {"RING CHIME", {6, 4, 96, 56, 9, 1, 0, 0}, {1, 101, 0, 87}, 0, 0, FX(0, 38, 12, 30), TAG(PT_KEYS)},
++    {"VELVET BRASS", {0, 1, 38, 85, 7, 0, 13, 0}, {19, 87, 76, 52}, 0, 0, FX(0, 28, 5, 36), TAG(PT_LEAD)},
+ };
+ 
+ static const engine_t ENG_PHASE = {
+--- a/firmware/src/midi_control.c
++++ b/firmware/src/midi_control.c
+@@ -224,6 +224,7 @@
+     0x80, 0x30, 0x30, 0x34, 0x30,                     /* GRAIN TONE, PHYS BRIT, DRUM TONE, NOISE FREQ RES, FM6 MLVL */
+     FELUCCA_SLICE ? 0x80 : 0x00,                      /* SLICE TONE */
+     0x30,                                             /* DRUM-X TONE */
++    0x23,                                             /* ATEK303 CUT, RES */
+ };
+ /* a CC sets parameter id of track t as a knob would: 0..127 over its range */
+ static void midi_cc_set(track_t *t, uint32_t id, uint32_t value)

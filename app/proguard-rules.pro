@@ -22,8 +22,9 @@
     @androidx.compose.runtime.Composable <methods>;
 }
 
-# Keep state data classes that may be serialized
--keep class com.groovebox.GrooveboxState { *; }
+# Project files and factory presets use Java serialization. JNI also reads
+# StepState by class and field name when loading sequence chains.
+-keep class com.groovebox.** implements java.io.Serializable { *; }
 -keep class com.groovebox.persistence.** { *; }
 
 # Prevent obfuscation of classes accessed via reflection

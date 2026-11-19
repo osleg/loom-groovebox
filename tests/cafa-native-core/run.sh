@@ -20,3 +20,16 @@ CXX="${CXX:-c++}"
 "$CXX" -std=c++17 -O2 -I"$ROOT/composeApp/native" \
     "$HERE/expanded_controls.cpp" "$BUILD/core.o" -o "$BUILD/expanded_controls"
 "$BUILD/expanded_controls"
+"$CXX" -std=c++17 -O2 -I"$ROOT/composeApp/native" \
+    "$HERE/snapshot_reads.cpp" "$BUILD/core.o" -o "$BUILD/snapshot_reads"
+"$BUILD/snapshot_reads"
+"$CXX" -std=c++17 -O2 -I"$ROOT/composeApp/native" \
+    "$HERE/mixing.cpp" "$BUILD/core.o" -o "$BUILD/mixing"
+"$BUILD/mixing"
+
+"$CXX" -std=c++17 -O2 -I"$ROOT/composeApp/native" \
+    "$HERE/note_gates_locks.cpp" "$BUILD/core.o" -o "$BUILD/note_gates_locks"
+"$BUILD/note_gates_locks"
+"$CXX" -std=c++17 -O2 -I"$ROOT/composeApp/native" \
+    "$HERE/recording_readback.cpp" "$BUILD/core.o" -o "$BUILD/recording_readback"
+"$BUILD/recording_readback"

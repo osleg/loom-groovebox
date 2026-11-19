@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-import com.groovebox.cafa.*;
+import org.fm1.companion.legacy.*;
 import java.io.*;
 import java.util.*;
 

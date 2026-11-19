@@ -18,7 +18,7 @@ public:
     void stop();
     void refreshInputStreamState();
     // Positive ID selects CAFA; 0 blocks output; -1 explicitly restores normal audio.
-    bool setCafaOutputDevice(int32_t deviceId);
+    bool setCafaOutputDevice(int32_t deviceId, int32_t sampleRate = 44100);
     int32_t getCafaOutputDevice();
     void setCafaAudioEnabled(bool enabled);
     bool isCafaAudioEnabled();
@@ -41,6 +41,7 @@ private:
     std::mutex mStreamMutex; // Control calls only; never acquired by the data callback.
     bool mStartRequested = false;
     std::atomic<int32_t> mCafaDeviceId{-1};
+    std::atomic<int32_t> mCafaSampleRate{44100};
     std::atomic<bool> mCafaAudioEnabled{false};
     std::atomic<oboe::AudioStream *> mCallbackOutput{nullptr};
     int mAudioThreadTid = -1;

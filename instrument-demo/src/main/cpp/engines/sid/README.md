@@ -1,0 +1,5 @@
+# SID
+
+The SID engine uses the unmodified `src/sid.c` and `src/sid.h` from [FM-1 SID at `2260253df0c614e507cd7d346d9771f4d353a820`](https://github.com/joakimeriksson/fm1-sid/tree/2260253df0c614e507cd7d346d9771f4d353a820/src). The source files identify their license as BSD-2-Clause, also listed in the [donor licensing notes](https://github.com/joakimeriksson/fm1-sid/blob/2260253df0c614e507cd7d346d9771f4d353a820/LICENSING.md). The license accompanies them in `thirdparty`.
+
+The adapter uses one chip model per allocated Skiff note, with the PAL clock and Skiff's pitch, modulation, amplifier envelope, and velocity. The voice uses the donor oscillators, including pulse, combined waves, noise, hard sync, and ring modulation, and the donor's resonant filter. The width knob responds to Skiff's SHAPE modulation and cutoff responds to FILTER modulation. The 6581 and 8580 are selectable. RATIO sets the carrier-to-source ratio for sync or the source-to-carrier ratio for ring modulation. All five presets were made for this engine.

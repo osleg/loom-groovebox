@@ -15,6 +15,9 @@ int main(){
  assert(!e.setCafaOutputDevice(0)); assert(!e.start()); assert(e.getCafaOutputDevice()==0); assert(!e.isCafaAudioEnabled());
  oboe::wrongDevice=true; assert(!e.setCafaOutputDevice(42)); assert(e.getCafaOutputDevice()==0); assert(!e.isCafaAudioEnabled()); oboe::wrongDevice=false;
  oboe::wrongRate=true; assert(!e.setCafaOutputDevice(42)); oboe::wrongRate=false;
+ assert(e.setCafaOutputDevice(42,48000)); assert(oboe::lastOutput->getSampleRate()==48000); assert(e.getCafaOutputDevice()==42); e.setCafaAudioEnabled(true); block(e,0.5f);
+ oboe::wrongRate=true; assert(!e.setCafaOutputDevice(42,48000)); assert(!e.isCafaAudioEnabled()); oboe::wrongRate=false;
+ assert(!e.setCafaOutputDevice(42,32000)); assert(e.getCafaOutputDevice()==0);
  oboe::failOpen=true; assert(!e.setCafaOutputDevice(42)); oboe::failOpen=false;
  assert(e.setCafaOutputDevice(42)); e.setCafaAudioEnabled(true); renderHook=[&]{e.setCafaAudioEnabled(false);}; block(e,0); renderHook={};
  assert(e.setCafaOutputDevice(-1)); block(e,0.5f);

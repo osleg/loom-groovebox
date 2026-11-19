@@ -1,0 +1,9 @@
+engines/chimera/thirdparty/ch_beat.c
+engines/chimera/thirdparty/ch_control.c
+engines/chimera/thirdparty/ch_creature.c
+engines/chimera/thirdparty/ch_speech.c
+engines/chimera/thirdparty/ch_tract.c
+engines/chimera/thirdparty/ch_voice.c
+engines/chimera/thirdparty/ch_wave.c
+engines/mora/thirdparty/fvoice.c
+engines/mora/thirdparty/mora.c

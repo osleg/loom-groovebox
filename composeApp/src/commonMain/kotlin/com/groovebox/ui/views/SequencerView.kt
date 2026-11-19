@@ -71,11 +71,10 @@ private fun syncTrackToEngine(
                 nativeLib.setStep(
                     selectedTrackIndex, stepIdx, s.active, intArrayOf(60 + instIdx),
                     s.velocity, s.ratchet, s.punch, s.probability, s.gate, s.isSkipped,
-                    s.subStepOffset, s.noteOffsets.toFloatArray(), s.noteVelocities.toFloatArray()
+                    s.subStepOffset, s.noteOffsets.toFloatArray(), s.noteVelocities.toFloatArray(),
+                    ((s.noteGates as Any?) as? List<Float> ?: emptyList()).toFloatArray(),
+                    s.parameterLocks.keys.toIntArray(), s.parameterLocks.values.toFloatArray()
                 )
-                s.parameterLocks.forEach { (pid, valAmt) ->
-                    nativeLib.setParameterLock(selectedTrackIndex, stepIdx, pid, valAmt)
-                }
             }
         }
     } else {
@@ -84,11 +83,10 @@ private fun syncTrackToEngine(
             nativeLib.setStep(
                 selectedTrackIndex, stepIdx, isActiveWithNotes, s.notes.toIntArray(),
                 s.velocity, s.ratchet, s.punch, s.probability, s.gate, s.isSkipped,
-                s.subStepOffset, s.noteOffsets.toFloatArray(), s.noteVelocities.toFloatArray()
+                s.subStepOffset, s.noteOffsets.toFloatArray(), s.noteVelocities.toFloatArray(),
+                    ((s.noteGates as Any?) as? List<Float> ?: emptyList()).toFloatArray(),
+                    s.parameterLocks.keys.toIntArray(), s.parameterLocks.values.toFloatArray()
             )
-            s.parameterLocks.forEach { (pid, valAmt) ->
-                nativeLib.setParameterLock(selectedTrackIndex, stepIdx, pid, valAmt)
-            }
         }
     }
 }
@@ -378,7 +376,9 @@ fun SequencerView(viewModel: com.groovebox.GrooveboxViewModel, nativeLib: Native
                                                                  step.probability, step.gate, step.isSkipped,
                                                                  step.subStepOffset, 
                                                                  step.noteOffsets.toFloatArray(),
-                                                                 step.noteVelocities.toFloatArray()
+                                                                 step.noteVelocities.toFloatArray(),
+                                                                 ((step.noteGates as Any?) as? List<Float> ?: emptyList()).toFloatArray(),
+                                                                 step.parameterLocks.keys.toIntArray(), step.parameterLocks.values.toFloatArray()
                                                              )
                                                         } else {
                                                              nativeLib.setStep(selectedTrackIndex, stepIdx, false, intArrayOf(), 0f, 1, false, 0f, 0f, false, 0.0f, null, null)
@@ -429,7 +429,9 @@ fun SequencerView(viewModel: com.groovebox.GrooveboxViewModel, nativeLib: Native
                                                            step.probability, step.gate, step.isSkipped,
                                                            step.subStepOffset,
                                                            step.noteOffsets.toFloatArray(),
-                                                           step.noteVelocities.toFloatArray()
+                                                           step.noteVelocities.toFloatArray(),
+                                                           ((step.noteGates as Any?) as? List<Float> ?: emptyList()).toFloatArray(),
+                                                           step.parameterLocks.keys.toIntArray(), step.parameterLocks.values.toFloatArray()
                                                        )
                                                    } else {
                                                        nativeLib.setStep(selectedTrackIndex, stepIdx, false, intArrayOf(), 0f, 1, false, 0f, 0f, false, 0.0f, null, null)
@@ -759,14 +761,14 @@ fun SequencerView(viewModel: com.groovebox.GrooveboxViewModel, nativeLib: Native
                                                             else dsteps
                                                         }
                                                         viewModel.onStateChange(currentState.copy(tracks = currentState.tracks.mapIndexed { idx, t -> if (idx == currentState.selectedTrackIndex) t.copy(drumSteps = newDrumSteps) else t }))
-                                                        nativeLib.setStep(currentState.selectedTrackIndex, stepIndex, newActive, finalNotes.toIntArray(), currentStep.velocity, currentStep.ratchet, currentStep.punch, currentStep.probability, currentStep.gate, currentStep.isSkipped)
+                                                        nativeLib.setStep(currentState.selectedTrackIndex, stepIndex, newActive, finalNotes.toIntArray(), currentStep.velocity, currentStep.ratchet, currentStep.punch, currentStep.probability, currentStep.gate, currentStep.isSkipped, currentStep.subStepOffset, currentStep.noteOffsets.toFloatArray(), currentStep.noteVelocities.toFloatArray(), ((currentStep.noteGates as Any?) as? List<Float> ?: emptyList()).toFloatArray(), currentStep.parameterLocks.keys.toIntArray(), currentStep.parameterLocks.values.toFloatArray())
                                                     } else {
                                                         val rootNote = 60
                                                         val finalNotes = if (newActive && currentStep.notes.isEmpty()) listOf(rootNote) else currentStep.notes
                                                         val newSteps = currentTrack.steps.mapIndexed { si, s -> if (si == stepIndex) s.copy(active = newActive, notes = finalNotes) else s }
                                                         viewModel.onStateChange(currentState.copy(tracks = currentState.tracks.mapIndexed { idx, t -> if (idx == currentState.selectedTrackIndex) t.copy(steps = newSteps) else t }))
                                                         val isActiveWithNotes = newActive && finalNotes.isNotEmpty()
-                                                        nativeLib.setStep(currentState.selectedTrackIndex, stepIndex, isActiveWithNotes, finalNotes.toIntArray(), currentStep.velocity, currentStep.ratchet, currentStep.punch, currentStep.probability, currentStep.gate, currentStep.isSkipped)
+                                                        nativeLib.setStep(currentState.selectedTrackIndex, stepIndex, isActiveWithNotes, finalNotes.toIntArray(), currentStep.velocity, currentStep.ratchet, currentStep.punch, currentStep.probability, currentStep.gate, currentStep.isSkipped, currentStep.subStepOffset, currentStep.noteOffsets.toFloatArray(), currentStep.noteVelocities.toFloatArray(), ((currentStep.noteGates as Any?) as? List<Float> ?: emptyList()).toFloatArray(), currentStep.parameterLocks.keys.toIntArray(), currentStep.parameterLocks.values.toFloatArray())
                                                     }
                                                 },
                                                 onLongPress = { 
@@ -782,12 +784,12 @@ fun SequencerView(viewModel: com.groovebox.GrooveboxViewModel, nativeLib: Native
                                                             }
                                                             viewModel.onStateChange(currentState.copy(tracks = currentState.tracks.mapIndexed { idx, t -> if (idx == currentState.selectedTrackIndex) t.copy(drumSteps = newDrumSteps) else t }))
                                                             val s = newDrumSteps[instIdx][stepIndex]
-                                                            nativeLib.setStep(currentState.selectedTrackIndex, stepIndex, s.active, s.notes.toIntArray(), s.velocity, s.ratchet, s.punch, s.probability, s.gate, false)
+                                                            nativeLib.setStep(currentState.selectedTrackIndex, stepIndex, s.active, s.notes.toIntArray(), s.velocity, s.ratchet, s.punch, s.probability, s.gate, false, s.subStepOffset, s.noteOffsets.toFloatArray(), s.noteVelocities.toFloatArray(), ((s.noteGates as Any?) as? List<Float> ?: emptyList()).toFloatArray(), s.parameterLocks.keys.toIntArray(), s.parameterLocks.values.toFloatArray())
                                                         } else {
                                                             val newSteps = currentTrack.steps.mapIndexed { si, s -> if (si == stepIndex) s.copy(isSkipped = false) else s }
                                                             viewModel.onStateChange(currentState.copy(tracks = currentState.tracks.mapIndexed { idx, t -> if (idx == currentState.selectedTrackIndex) t.copy(steps = newSteps) else t }))
                                                             val s = newSteps[stepIndex]
-                                                            nativeLib.setStep(currentState.selectedTrackIndex, stepIndex, s.active, s.notes.toIntArray(), s.velocity, s.ratchet, s.punch, s.probability, s.gate, false)
+                                                            nativeLib.setStep(currentState.selectedTrackIndex, stepIndex, s.active, s.notes.toIntArray(), s.velocity, s.ratchet, s.punch, s.probability, s.gate, false, s.subStepOffset, s.noteOffsets.toFloatArray(), s.noteVelocities.toFloatArray(), ((s.noteGates as Any?) as? List<Float> ?: emptyList()).toFloatArray(), s.parameterLocks.keys.toIntArray(), s.parameterLocks.values.toFloatArray())
                                                         }
                                                     } else {
                                                         showStepPopup = true 
@@ -812,18 +814,32 @@ fun SequencerView(viewModel: com.groovebox.GrooveboxViewModel, nativeLib: Native
                                                 val currentState = viewModel.state
                                                 val currentTrack = currentState.tracks[currentState.selectedTrackIndex]
                                                 val currentStep = if (isMultiTrack) currentTrack.drumSteps[currentTrack.selectedFmDrumInstrument][stepIndex] else currentTrack.steps[stepIndex]
+                                                val oldNoteGates = (currentStep.noteGates as Any?) as? List<Float> ?: emptyList()
+                                                val newNoteGates = if (gate != currentStep.gate) List(notes.size) { gate }
+                                                    else if (notes == currentStep.notes) oldNoteGates
+                                                    else notes.map { note -> currentStep.notes.indexOf(note).let { oldIndex ->
+                                                        if (oldIndex >= 0) oldNoteGates.getOrNull(oldIndex) ?: currentStep.gate else currentStep.gate
+                                                    } }
+                                                val newNoteOffsets = if (notes == currentStep.notes) currentStep.noteOffsets
+                                                    else notes.map { note -> currentStep.notes.indexOf(note).let { oldIndex ->
+                                                        if (oldIndex >= 0) currentStep.noteOffsets.getOrNull(oldIndex) ?: subStepOffset else subStepOffset
+                                                    } }
+                                                val newNoteVelocities = if (notes == currentStep.notes) currentStep.noteVelocities
+                                                    else notes.map { note -> currentStep.notes.indexOf(note).let { oldIndex ->
+                                                        if (oldIndex >= 0) currentStep.noteVelocities.getOrNull(oldIndex) ?: velocity else velocity
+                                                    } }
                                                 if (isMultiTrack) {
                                                     val instIdx = currentTrack.selectedFmDrumInstrument
                                                     val newDrumSteps = currentTrack.drumSteps.mapIndexed { di, dsteps ->
-                                                        if (di == instIdx) dsteps.mapIndexed { si, s -> if (si == stepIndex) s.copy(ratchet = ratchet, punch = punch, probability = probability, gate = gate, velocity = velocity, notes = notes, isSkipped = isSkipped, parameterLocks = parameterLocks, subStepOffset = subStepOffset) else s }
+                                                        if (di == instIdx) dsteps.mapIndexed { si, s -> if (si == stepIndex) s.copy(ratchet = ratchet, punch = punch, probability = probability, gate = gate, velocity = velocity, notes = notes, isSkipped = isSkipped, parameterLocks = parameterLocks, subStepOffset = subStepOffset, noteOffsets = newNoteOffsets, noteVelocities = newNoteVelocities, noteGates = newNoteGates) else s }
                                                         else dsteps
                                                     }
                                                     viewModel.onStateChange(currentState.copy(tracks = currentState.tracks.mapIndexed { idx, t -> if (idx == currentState.selectedTrackIndex) t.copy(drumSteps = newDrumSteps) else t }))
-                                                    nativeLib.setStep(currentState.selectedTrackIndex, stepIndex, currentStep.active, notes.toIntArray(), velocity, ratchet, punch, probability, gate, isSkipped, subStepOffset)
+                                                    nativeLib.setStep(currentState.selectedTrackIndex, stepIndex, currentStep.active, notes.toIntArray(), velocity, ratchet, punch, probability, gate, isSkipped, subStepOffset, newNoteOffsets.toFloatArray(), newNoteVelocities.toFloatArray(), newNoteGates.toFloatArray(), parameterLocks.keys.toIntArray(), parameterLocks.values.toFloatArray())
                                                 } else {
-                                                    val newSteps = currentTrack.steps.mapIndexed { si, s -> if (si == stepIndex) s.copy(ratchet = ratchet, punch = punch, probability = probability, gate = gate, notes = notes, velocity = velocity, isSkipped = isSkipped, parameterLocks = parameterLocks, subStepOffset = subStepOffset) else s }
+                                                    val newSteps = currentTrack.steps.mapIndexed { si, s -> if (si == stepIndex) s.copy(ratchet = ratchet, punch = punch, probability = probability, gate = gate, notes = notes, velocity = velocity, isSkipped = isSkipped, parameterLocks = parameterLocks, subStepOffset = subStepOffset, noteOffsets = newNoteOffsets, noteVelocities = newNoteVelocities, noteGates = newNoteGates) else s }
                                                     viewModel.onStateChange(currentState.copy(tracks = currentState.tracks.mapIndexed { idx, t -> if (idx == currentState.selectedTrackIndex) t.copy(steps = newSteps) else t }))
-                                                    nativeLib.setStep(currentState.selectedTrackIndex, stepIndex, currentStep.active, notes.toIntArray(), velocity, ratchet, punch, probability, gate, isSkipped, subStepOffset)
+                                                    nativeLib.setStep(currentState.selectedTrackIndex, stepIndex, currentStep.active, notes.toIntArray(), velocity, ratchet, punch, probability, gate, isSkipped, subStepOffset, newNoteOffsets.toFloatArray(), newNoteVelocities.toFloatArray(), newNoteGates.toFloatArray(), parameterLocks.keys.toIntArray(), parameterLocks.values.toFloatArray())
                                                 }
                                             },
                                             onParamLock = {

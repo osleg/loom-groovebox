@@ -1,0 +1,78 @@
+--- a/firmware/src/ui_layer.c
++++ b/firmware/src/ui_layer.c
+@@ -11,7 +11,7 @@
+  *   SCL  SET   any key: its note name is ROOT; KNOB 1..4 ROOT SCL CHRD VOIC (LY_SCL: the SCL page's first two,
+  *              the CHORD page's two; QNT TRN stay on SCL); the LEDs show the root lit and the scale's notes breathing
+  *   EDIT SET   the white keys from F3: the engines in PRESETS order (one key each, the NENG_SHOWN one can pick:
+- *              engines.c eng_vis), the next white key INIT (LY_INIT: F5)
++ *              engines.c eng_vis), INIT after them (or at the last white key for larger catalogs).
+  *              (the dialog); KNOB 1 ENG, 2 No. (the engine's sounds), 3 FAV. Sound loads as on PRESETS: the steps
+  *              stay, SAVE held undoes, the editor gets RELOAD; they apply while playing too
+  *   SEQ  SET   ((Skiff U2) on every page; up to U1 only on the SEQ pages that show the pattern, SEQ held elsewhere
+@@ -72,8 +72,14 @@
+ #define LY_OPEN 2u                     /* ui.ly_t0: the map opened (no tap any more) */
+ #define LY_COMBO 4u                    /* .. by a combo */
+ #define LY_DEAD 8u                     /* .. pressed where there is no layer: does nothing */
+-#define LY_INIT ((uint32_t)NENG_SHOWN) /* EDIT: the white key of INIT, the one after the engines (14: F5), its map cell */
+-typedef char ly_init_fits[LY_INIT < 16u ? 1 : -1];   /* (a white key: F3 .. G5) */
++#define LY_INIT (NENG_SHOWN < 16u ? (uint32_t)NENG_SHOWN : 15u) /* EDIT: INIT follows the engines when they fit; otherwise last white key */
++/* EDIT's keys, lights, and map share the selected engine's 15-key window. */
++static uint32_t ly_edit_top(void) { return (eng_rank(TSEL->eng_req % NENGINES) / 15u) * 15u; }
++static uint32_t ly_edit_engine(uint32_t p)
++{
++    uint32_t rank = ly_edit_top() + p;
++    return p < LY_INIT && rank < NENG_SHOWN ? eng_vis(rank) : NENGINES;
++}
+ #define layer_seen (favorites.factory[15][31])   /* bit l: layer l opened once (a byte no engine uses) */
+ static const khint_t FX_LATCH_FOOT[3] = {{KC_WHITE, "ON / OFF"}, {KC_BLACK, "MUTE"}, {KC_OCTDN, "ALL OFF"}};
+ static const khint_t GLO_LOCK_FOOT[3] = {{KC_OCTDN, "UNDO"}, {KC_GLO, "DONE"}, {0, 0}};   /* (locked: PLAY plays) */
+@@ -589,8 +595,8 @@
+     } else if (l == LAYER_SCL) {
+         TSEL->p[P_ROOT] = (int16_t)((k + 5u) % 12u);    /* the key's note name (F3 = F) */
+     } else if (l == LAYER_EDIT && !key_black(k)) {
+-        if (p < NENG_SHOWN && p < LY_INIT)
+-            edit_load(eng_vis(p), 0);
++        if (ly_edit_engine(p) < NENGINES)
++            edit_load(ly_edit_engine(p), 0);
+         else if (p == LY_INIT)
+             confirm_open(CF_INIT_SOUND, song.sel);      /* (the dialog closes the layer) */
+     } else if (l == LAYER_EDIT && p < NLANE && drum_track(TSEL)) {   /* ((1.3, from Felucca 1.4.1) black keys 1..8:
+@@ -820,8 +826,9 @@
+             can = (mask >> e) & 1u;
+         } else if (l == LAYER_EDIT && !b) {             /* the engine lit, the others and INIT breathe; ((Skiff phase 6)
+                                                          * one the track may not play dark: engines.c eng_allowed) */
+-            on = p < NENG_SHOWN && p < LY_INIT && eng_vis(p) == TSEL->eng_req % NENGINES;
+-            can = p < NENG_SHOWN && p < LY_INIT ? (uint32_t)eng_allowed(song.sel, eng_vis(p)) : p == LY_INIT;
++            e = ly_edit_engine(p);
++            on = e < NENGINES && e == TSEL->eng_req % NENGINES;
++            can = e < NENGINES ? (uint32_t)eng_allowed(song.sel, e) : p == LY_INIT;
+         } else if (l == LAYER_EDIT && p < NLANE && drum_track(TSEL)) {   /* ((1.3) the lanes: sounding lit, muted
+                                                          * breathe, as GLO's track mutes) */
+             on = !((drum_mute[song.sel] >> p) & 1u);
+@@ -1154,17 +1161,20 @@
+         m |= (uint32_t)scene_used(p) << p;
+     return (h ^ m) * 16777619u;
+ }
+-static void layer_edit(void)                            /* the engines from F3, INIT next (LY_INIT), the sound under them */
++static void layer_edit(void)                            /* the engines from F3, INIT at LY_INIT, the sound under them */
+ {                                                        /* (cells show the engine's icon, not the key's note) */
+-    uint32_t n = NENG_SHOWN < LY_INIT ? NENG_SHOWN : LY_INIT, cells = n + 1u, i, h = cells > 12u ? 20u : 28u;   /* 4 rows of 20: 8 px clear above the sound row */
++    uint32_t cells = LY_INIT + 1u, i, h = cells > 12u ? 20u : 28u;   /* 4 rows of 20: 8 px clear above the sound row */
+     for (i = 0; i < cells; i++) {
+         int32_t x = LC_X(i % 4u), y = 4 + (int32_t)(h + 4u) * (int32_t)(i / 4u);
+-        const engine_t *en = ENGINES[eng_vis(i) % NENGINES];
+-        if (i < n)
++        uint32_t e = ly_edit_engine(i);
++        if (e < NENGINES) {
++            const engine_t *en = ENGINES[e];
+             lcell(x, y, (int32_t)h, 0, engine_icon(en->name), h > 24u ? en->name : eng_abbr(en->name),
+-                  eng_vis(i) == TSEL->eng_req % NENGINES ? LS_SEL : eng_allowed(song.sel, eng_vis(i)) ? LS_OFF : LS_DIM);
+-        else
++                  e == TSEL->eng_req % NENGINES ? LS_SEL : eng_allowed(song.sel, e) ? LS_OFF : LS_DIM);
++        } else if (i == LY_INIT)
+             lcell(x, y, (int32_t)h, 0, ICON_X_WARN, "INIT", LS_OFF);
++        else
++            lcell(x, y, (int32_t)h, 0, 0, "", LS_DIM);
+     }
+     if (!drum_track(TSEL)) {
+         engine_sound_row(104);

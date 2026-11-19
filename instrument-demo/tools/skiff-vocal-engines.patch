@@ -1,0 +1,253 @@
+--- a/firmware/src/core.h
++++ b/firmware/src/core.h
+@@ -95,7 +95,7 @@
+                                   * sounds (fm4_convert.c), settings PER1..PER3, 1.0's FM6 bank. Only the converter
+                                   * (web/conv) and its tests build them; 2.0 keeps such a record's bytes (OLD FORMAT) */
+ #endif
+-#define NENGINES 37u             /* Phone engine IDs append after stock Skiff IDs 0..14. */
++#define NENGINES 43u             /* Phone engine IDs append after stock Skiff IDs 0..14. */
+ #define ENGI_ATEK303 15u
+ #define ENGI_FMINI 16u
+ #define ENGI_808 17u
+@@ -118,6 +118,12 @@
+ #define ENGI_CZ1 34u
+ #define ENGI_LOFI_SMP 35u
+ #define ENGI_CLOUD 36u
++#define ENGI_CHIMERA 37u
++#define ENGI_DX386 38u
++#define ENGI_SPEAK37 39u
++#define ENGI_MORA 40u
++#define ENGI_VOWEL_CHOIR 41u
++#define ENGI_HAWK_CHUA 42u
+ #define ENGI_DIGITAL 1u          /* reserved without FELUCCA_FM4: never selectable (eng_ok), its sounds load as FM6 */
+ #define ENGI_SLICE 13u           /* reserved without FELUCCA_SLICE, as DIGITAL is without FELUCCA_FM4 */
+ #define NENG_SHOWN (NENGINES - !FELUCCA_FM4 - !FELUCCA_SLICE)   /* the engines one can pick: PRESETS, the EDIT layer,
+--- a/firmware/src/engines.c
++++ b/firmware/src/engines.c
+@@ -44,6 +44,12 @@
+ #include "plaits/eng_plaits.c"
+ #include "cz/eng_cz.c"
+ #include "samplers/eng_samplers.c"
++#include "chimera/eng_chimera.c"
++#include "dx386/eng_dx386.c"
++#include "speak37/eng_speak37.c"
++#include "mora/eng_mora.c"
++#include "vowel_choir/eng_vowel_choir.c"
++#include "hawk_chua/eng_hawk_chua.c"
+ 
+ /* Skiff: a track runs one engine at a time, and an engine switch fades the old one out before the new one starts
+  * (voice.c engine_block), so a part's engines share one area, as big as the biggest's (PHYS: its 3 slots): ~48 KB for
+@@ -71,6 +77,12 @@
+     plaits_part_t macro;
+     cz1_part_t cz1;
+     gr_part_t grain;
++    chimera_part_t chimera;
++    dx386_part_t dx386;
++    speak37_part_t speak37;
++    mora_part_t mora;
++    vowel_choir_part_t vowel_choir;
++    hawk_chua_part_t hawk_chua;
+     drum_lane_t drum[DV_NLANE];
+     drumx_lane_t drumx[DV_NLANE];
+     fm6_note_t fm6[FM6_POLY];
+@@ -102,6 +114,12 @@
+     plaits_part_t macro;
+     cz1_part_t cz1;
+     gr_part_t grain;
++    chimera_part_t chimera;
++    dx386_part_t dx386;
++    speak37_part_t speak37;
++    mora_part_t mora;
++    vowel_choir_part_t vowel_choir;
++    hawk_chua_part_t hawk_chua;
+     drum_lane_t drum[DV_NLANE];
+     drumx_lane_t drumx[DV_NLANE];
+     fm6_note_t fm6[FM6_POLY];
+@@ -172,6 +190,12 @@
+     &ENG_CZ1,
+     &ENG_LOFI_SMP,
+     &ENG_CLOUD,
++    &ENG_CHIMERA,
++    &ENG_DX386,
++    &ENG_SPEAK37,
++    &ENG_MORA,
++    &ENG_VOWEL_CHOIR,
++    &ENG_HAWK_CHUA,
+ };
+ 
+ /* a track's engine number as an index (the audio paths: a compare, cheaper than % NENGINES; a bad number: 0) */
+@@ -236,6 +260,12 @@
+     ENGI_CZ1,
+     ENGI_LOFI_SMP,
+     ENGI_CLOUD,
++    ENGI_CHIMERA,
++    ENGI_DX386,
++    ENGI_SPEAK37,
++    ENGI_MORA,
++    ENGI_VOWEL_CHOIR,
++    ENGI_HAWK_CHUA,
+ };
+ 
+ /* the engines one can pick (engine 1 only with FELUCCA_FM4), in ENGINE_ORDER: eng_ok(e), the n-th of them
+--- a/firmware/src/params.c
++++ b/firmware/src/params.c
+@@ -92,6 +92,7 @@
+ #endif
+                                              "DRUM-X", "ATEK303",
+     "FMINI", "808", "909", "YM2612", "SN76489", "SID", "ARP2600", "EMINENT", "KEYS", "FM-106", "FIMBA", "MONK", "ESQ", "PROPHET", "CS-1", "OBERVAVE", "SYNTHEX", "MACRO", "CZ-1", "LOFI SMP", "CLOUD",
++    "CHIMERA", "DX386", "SPEAK37", "MORA", "CHOIR", "CHUA",
+ };
+ 
+ #define PD(l, f, mn, mx, df) {l, 0, mn, mx, df, f, 0}
+--- a/firmware/src/midi_control.c
++++ b/firmware/src/midi_control.c
+@@ -246,6 +246,12 @@
+     0x30,                                             /* CZ1 */
+     0x60,                                             /* LOFI SMP */
+     0x20,                                             /* CLOUD */
++    0x44,                                             /* CHIMERA */
++    0x34,                                             /* DX386 */
++    0x44,                                             /* SPEAK37 */
++    0x34,                                             /* MORA */
++    0x44,                                             /* VOWEL_CHOIR */
++    0x30,                                             /* HAWK_CHUA */
+ };
+ /* a CC sets parameter id of track t as a knob would: 0..127 over its range */
+ static void midi_cc_set(track_t *t, uint32_t id, uint32_t value)
+--- a/firmware/src/fx.c
++++ b/firmware/src/fx.c
+@@ -925,8 +925,8 @@
+  * DIST / SLICER while it sounds or its tail runs. ENGINES[] order. An estimate: it only steers the split, the sound does
+  * not depend on it */
+ static uint16_t part_cost[NPART];                       /* the last block's, per track */
+-static const uint16_t ENG_VCOST[NENGINES] = {163, 0, 162, 67, 70, 174, 144, 143, 189, 309, 113, 134, 181, 129, 120, 360, 255, 180, 180, 270, 130, 300, 340, 170, 410, 300, 190, 240, 300, 310, 255, 320, 300, 410, 280, 220, 350};
+-_Static_assert(NENGINES == 37, "ENG_VCOST: a cost per engine");
++static const uint16_t ENG_VCOST[NENGINES] = {163, 0, 162, 67, 70, 174, 144, 143, 189, 309, 113, 134, 181, 129, 120, 360, 255, 180, 180, 270, 130, 300, 340, 170, 410, 300, 190, 240, 300, 310, 255, 320, 300, 410, 280, 220, 350, 560, 560, 330, 410, 320, 420};
++_Static_assert(NENGINES == 43, "ENG_VCOST: a cost per engine");
+ #else
+ static int32_t send_c[CTL], send_d[CTL], send_e[CTL], send_r[CTL], wet[CTL], mix_l[CTL], mix_r[CTL];
+ #endif
+--- a/firmware/src/favorites.c
++++ b/firmware/src/favorites.c
+@@ -2,7 +2,7 @@
+  * Copyright (C) 2026 Leo Kuroshita (@kurogedelic), Hügelton Instruments */
+ #define FELUCCA_FAVORITES 1
+ /* Stable engine IDs. Row 15 of the original table holds Skiff preferences. */
+-#define FAVORITE_EXTRA_ENGINES 25u /* IDs 15..39, 256 presets each */
++#define FAVORITE_EXTRA_ENGINES 28u /* IDs 15..42, 256 presets each */
+ typedef struct {
+     uint8_t factory[16][32]; /* IDs 0..14; row 15 is preferences */
+     uint32_t user, filter;
+--- a/firmware/src/settings_persist.c
++++ b/firmware/src/settings_persist.c
+@@ -49,7 +49,7 @@
+     uint8_t cpal_cols[22];                     /* THEME CUSTOM's colours (ui.c CPAL_COLS: favorites.factory[14][8..29]) */
+     uint8_t ml[30];                            /* MIDI LEARN's map (midi_learn.c ml_tab: favorites.factory[1][2..31]) */
+     uint8_t room[32];
+-    /* SKS2 appends bounded favorites for stable engine IDs 15..39. The SKS1
++    /* SKS2 appends bounded favorites for stable engine IDs 15..42. The SKS1
+      * prefix above stays byte-for-byte readable. Storage checksums the whole
+      * object; this hash also rejects an invalid extension in direct imports. */
+     uint32_t ext_magic, ext_version, ext_hash;
+@@ -58,16 +58,18 @@
+ #define SKS_MAGIC 0x534B5331u                  /* "SKS1" */
+ #define SKS2_MAGIC 0x534B5332u                 /* "SKS2" */
+ #define FAV2_MAGIC 0x46415632u                 /* "FAV2" */
+-#define FAV2_VERSION 1u
++#define FAV2_VERSION 2u
++#define FAV2_V1_BYTES (25u * 32u)
++#define SKS2_V1_SIZE (offsetof(sks_t, ext_fav) + FAV2_V1_BYTES)
+ #define SKS1_SIZE offsetof(sks_t, ext_magic)
+ _Static_assert(sizeof(sks_skiff_t) == 32u && ENGI_DIGITAL == 1u, "SKS1: favorites.factory[15], MIDI LEARN in row 1");
+ 
+-static uint32_t fav2_hash(const uint8_t (*rows)[32])
++static uint32_t fav2_hash(const void *rows, uint32_t size)
+ {
+     uint32_t h = 2166136261u;
+     const uint8_t *b = (const uint8_t *)rows;
+     uint32_t i;
+-    for (i = 0; i < sizeof favorites.extra; i++)
++    for (i = 0; i < size; i++)
+         h = (h ^ b[i]) * 16777619u;
+     return h;
+ }
+@@ -167,6 +169,21 @@
+     memcpy(s->cpal_cols, &ff[14][8], sizeof s->cpal_cols);
+     memcpy(s->ml, &ff[ENGI_DIGITAL][2], sizeof s->ml);
+ }
++/* Verify the matching historical or current size before reading the extension. */
++static uint32_t sks_favorite_bytes(const sks_t *s, uint32_t n)
++{
++    if ((n != sizeof *s && n != SKS2_V1_SIZE) || s->magic != SKS2_MAGIC || s->ext_magic != FAV2_MAGIC)
++        return 0;
++    uint32_t bytes;
++    if (n == SKS2_V1_SIZE && s->ext_version == 1u)
++        bytes = FAV2_V1_BYTES;
++    else if (n == sizeof *s && s->ext_version == FAV2_VERSION)
++        bytes = sizeof s->ext_fav;
++    else
++        return 0;
++    return s->ext_hash == fav2_hash(s->ext_fav, bytes) ? bytes : 0;
++}
++
+ /* b, n bytes of a stored settings record: SKS2, SKS1, or PER4. The SKS1
+  * prefix and all old preference fields keep their original offsets. */
+ static int settings_import(void *b, int n)
+@@ -174,10 +191,8 @@
+     sks_t *s = (sks_t *)b;
+     persist_t p;
+     int old = n == (int)SKS1_SIZE && s->magic == SKS_MAGIC;
+-    int current = n == (int)sizeof *s && s->magic == SKS2_MAGIC &&
+-        s->ext_magic == FAV2_MAGIC && s->ext_version == FAV2_VERSION &&
+-        s->ext_hash == fav2_hash((const uint8_t (*)[32])s->ext_fav);
+-    if (!old && !current)
++    uint32_t bytes = sks_favorite_bytes(s, (uint32_t)n);
++    if (!old && !bytes)
+         return settings_import_per((persist_t *)b, n);
+     p.magic = PERSIST_MAGIC; p.palette = s->palette; p.lowcut = s->lowcut; p.zoom = s->zoom; p.bold = s->bold;
+     p.panel = s->panel;
+@@ -188,7 +203,7 @@
+     memcpy(&p.favorites.factory[ENGI_DIGITAL][2], s->ml, sizeof s->ml);
+     p.favorites.user = s->fav_user; p.favorites.filter = s->fav_filter;
+     (void)settings_import_per(&p, sizeof p);
+-    if (current) memcpy(favorites.extra, s->ext_fav, sizeof favorites.extra);
++    if (bytes) memcpy(favorites.extra, s->ext_fav, bytes);
+     s->palette = p.palette;
+     sks_pack(s, (const uint8_t (*)[32])p.favorites.factory, p.favorites.user, p.favorites.filter);
+     if (old) memset((uint8_t *)s + SKS1_SIZE, 0, sizeof *s - SKS1_SIZE);
+@@ -196,8 +211,8 @@
+     s->ext_magic = FAV2_MAGIC;
+     s->ext_version = FAV2_VERSION;
+     memcpy(s->ext_fav, favorites.extra, sizeof favorites.extra);
+-    s->ext_hash = fav2_hash((const uint8_t (*)[32])s->ext_fav);
+-    return current ? 1 : 2;
++    s->ext_hash = fav2_hash(s->ext_fav, sizeof s->ext_fav);
++    return n == (int)sizeof *s ? 1 : 2;
+ }
+ 
+ /* Start with the last imported/saved object, including fields owned by a
+@@ -214,5 +229,5 @@
+     s->ext_magic = FAV2_MAGIC;
+     s->ext_version = FAV2_VERSION;
+     memcpy(s->ext_fav, favorites.extra, sizeof favorites.extra);
+-    s->ext_hash = fav2_hash((const uint8_t (*)[32])s->ext_fav);
+-}
++    s->ext_hash = fav2_hash(s->ext_fav, sizeof s->ext_fav);
++}
+--- a/firmware/src/editor_backup.c
++++ b/firmware/src/editor_backup.c
+@@ -148,11 +148,9 @@
+     } else if (ed_bk_id == 1u) {                    /* SKS2, or an older SKS1/PER4 archive converted on restore */
+         const persist_t *p = (const persist_t *)raw;
+         const sks_t *s = (const sks_t *)raw;
+-        if (ed_bk_len == sizeof *s || ed_bk_len == SKS1_SIZE ?
+-                                   (ed_bk_len == sizeof *s ? s->magic != SKS2_MAGIC ||
+-                                       s->ext_magic != FAV2_MAGIC || s->ext_version != FAV2_VERSION ||
+-                                       s->ext_hash != fav2_hash((const uint8_t (*)[32])s->ext_fav) :
+-                                       s->magic != SKS_MAGIC) ||
++        if (ed_bk_len == sizeof *s || ed_bk_len == SKS2_V1_SIZE || ed_bk_len == SKS1_SIZE ?
++                                   (ed_bk_len == SKS1_SIZE ? s->magic != SKS_MAGIC :
++                                       !sks_favorite_bytes(s, ed_bk_len)) ||
+                                    !ed_bk_set_ok(s->palette, s->lowcut, s->zoom, s->bold, s->fav_filter, &s->panel)
+                                    : ed_bk_len != sizeof *p || p->magic != PERSIST_MAGIC ||
+                                      !ed_bk_set_ok(p->palette, p->lowcut, p->zoom, p->bold, p->favorites.filter, &p->panel))

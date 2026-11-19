@@ -51,7 +51,7 @@ import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-fun SettingsScreen(state: GrooveboxState, onStateChange: (GrooveboxState) -> Unit, nativeLib: NativeLib, midiManager: MidiManager? = null) {
+fun SettingsScreen(state: GrooveboxState, onStateChange: (GrooveboxState) -> Unit, nativeLib: NativeLib, midiManager: MidiManager? = null, stateForSave: () -> GrooveboxState = { state }) {
     // val context = LocalContext.current // Removed
     var mappingStripIndex by remember { mutableStateOf(-1) }
     Column(modifier = Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
@@ -104,12 +104,13 @@ fun SettingsScreen(state: GrooveboxState, onStateChange: (GrooveboxState) -> Uni
                 confirmButton = {
                     Button(onClick = {
                         if (fileName.isNotBlank()) {
+                            val projectState = stateForSave()
                             scope.launch(Dispatchers.IO) {
                                 try {
-                                    PersistenceManager.saveProject(state, fileName)
+                                    val saved = PersistenceManager.saveProject(projectState, fileName)
                                     withContext(Dispatchers.Main) {
-                                        platformShowMessage("Project Saved: $fileName")
-                                        showSaveDialog = false
+                                        platformShowMessage(if (saved) "Project Saved: $fileName" else "Save Failed")
+                                        if (saved) showSaveDialog = false
                                     }
                                 } catch (e: Exception) {
                                     withContext(Dispatchers.Main) {

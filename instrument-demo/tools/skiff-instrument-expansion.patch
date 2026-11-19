@@ -1,0 +1,2764 @@
+--- a/firmware/src/bank.c
++++ b/firmware/src/bank.c
+@@ -1,40 +1,13 @@
+ /* SPDX-License-Identifier: GPL-3.0-only */
+-/* Skiff: the pattern pool (DESIGN.md SAVE > PATTERNS). Sixty-four patterns, kept in flash exactly as they were played:
+- * every step whole (its notes and chord, velocity, accent, slide, chance, RATCH or FLAM, trig condition, NUDGE, lane
+- * hits and their accents), LEN DIV SWING GATE and DIR, and the track's automation and locks. (Phase 5) Each track's
+- * list (A..P, ui.c lists) names pool patterns, a project its lists (SKF2): the patterns are every project's. What a
+- * track has is kept as the pattern it is on, by itself: waiting in RAM (PEND_N), written at the autosave's quiet stop.
+- *
+- * A pattern is BK_REC bytes:
+- *   0          the version (0: empty)
+- *   1          the parameter count its motion's ids are of (project.c proj_motion_ids): (Skiff phase 9) PROJ_NP,
+- *              which firmware before reads, unless the motion names a parameter added since: then P_COUNT
+- *   2..6       LEN DIV SWING GATE DIR, each + 64 (the sound's own values, not an automated one)
+- *   7          its motion records (0..64), bit 7: the automation plays (motion.on)
+- *   8..583     the 64 steps, 9 bytes each (project.c step_put9)
+- *   584..631   their NUDGE (core.h nudge_pack)
+- *   632..887   the motion, 64 x (step (bit 6: the id's bit 7), id (bit 7: a lock), value low, value high)
+- * (Skiff 1.3) A record whose motion names an id from 128 on (P_COUNT passed 127: only one written with r[1] = P_COUNT,
+- * a parameter added since phase 9 named) is version 2 (BK_VER2), its ids' bit 7 in bit 6 of their step byte; every
+- * other one version 1 as before, which firmware before reads (it shows a version 2 as empty).
+- * (Skiff 2.0, #25) A record with a step's per-note ties (core.h step_ties: byte 7 of a step without hits) is version 3
+- * (BK_VER3, BK_VER2's ids too): 1.4 shows it as empty; one without any stays version 1 or 2, byte for byte as before
+- * Phase 5: the records are one pool, ids 0..BK_POOL-1 (pool_put, pat_decode); id = track x 16 + slot, so a chunk is
+- * still one track's A..D, E..H, I..L or M..P and every bank saved before reads the same by id.
+- * Flash: BK_CHUNKS chunks of BK_PER patterns (ids 4c .. 4c+3), each written whole to one
+- * of BK_NSECT sectors (fm1_flash.h FL_BANK, FL_USR: 0xE7000..0xE8FFF, 0xEA000..0xFBFFF) that holds no chunk's current
+- * copy: the payload from offset 256, then the commit record at 0 (its own magic, the chunk, a sequence, the payload's
+- * length and hash, the record's hash) last, so a write torn anywhere leaves the chunk's copy before in charge. At boot
+- * each chunk's newest copy whose payload checks wins. Four sectors spare: saves go round the free ones (wear). No RAM
+- * image: a pattern is read when it is loaded (SPI, short IRQ-off windows: playing goes on); a write reads its chunk,
+- * changes its patterns and writes it, only while stopped (an erase mutes the audio).
+- * Without the flash driver (FELUCCA_FLASH 0) BK_RAM keeps the sectors in RAM (the host's UI tests); else no bank. */
++/* The companion keeps one expanded pattern per sector after the original 1 MiB image.
++ * Four spare sectors preserve the rotate-and-commit behavior. Original SKB1 sectors
++ * stay readable until each individual pattern is replaced or cleared in the new bank.
++ * A new record stores length minus one in byte 2 and full step, parameter, value
++ * and lock bytes in each motion entry. The other timing and step fields are unchanged. */
+ #define BK_SLOTS 16u
+-#define BK_VER 1u
+-#define BK_VER2 2u                                 /* (Skiff 1.3) an id from 128 on (see the top) */
+-#define BK_VER3 3u                                 /* (Skiff 2.0, #25) per-note ties (see the top) */
+-static int bk_ver(uint32_t v) { return v == BK_VER || v == BK_VER2 || v == BK_VER3; }
+-#define BK_PER 4u
++#define BK_VER 4u
++static int bk_ver(uint32_t v) { return v == BK_VER; }
++#define BK_PER 1u
+ #define BK_POOL NPAT                               /* the patterns, ids 0 .. 63 (every track's: phase 5) */
+ #define BK_CHUNKS (BK_POOL / BK_PER)
+ #define BK_STEPS 8u
+@@ -42,18 +15,19 @@
+ #define BK_MOT (BK_NUDGE + NSTEP / 4u * 3u)
+ #define BK_REC (BK_MOT + MOTION_MAX * 4u)
+ #define BK_LEN (BK_PER * BK_REC)                   /* a chunk's payload */
+-#define BK_NSECT 20u
++#define BK_NSECT (BK_CHUNKS + 4u)
+ #define BK_NONE 0xFFu
+-#define BK_MAGIC 0x31424B53u                       /* "SKB1" */
+-_Static_assert(BK_REC == 888u && BK_LEN <= 4096u - 256u && BK_CHUNKS + 4u == BK_NSECT, "pattern bank layout");
++#define BK_MAGIC 0x32424B53u                       /* "SKB2" */
++_Static_assert(BK_LEN <= 4096u - 256u && BK_CHUNKS + 4u == BK_NSECT, "pattern bank layout");
+ typedef struct { uint32_t magic, chunk, seq, len, sum, rsv[2], hsum; } bk_hdr_t;   /* at a sector's 0 */
+ static const uint8_t BK_TIME[5] = {P_SLEN, P_SDIV, P_SSWING, P_SGATE, P_DIR};
+ 
+ static struct {
++    uint8_t legacy_sect[16];                       /* original chunk winners */
+     uint8_t sect[BK_CHUNKS];                       /* each chunk's current sector + 1 (0: never saved, all empty) */
+     uint32_t top;                                  /* the newest sequence (a save: + 1) */
+     uint8_t next;                                  /* the sector a save tries first (round: wear) */
+-    uint8_t len[BK_POOL];                          /* each pattern's LEN, 0 = empty (the page) */
++    uint16_t len[BK_POOL];                          /* each pattern's LEN, 0 = empty (the page) */
+     uint8_t div[BK_POOL];                          /* ((2.5, 2B) .. its DIV (N_DIV): a song's bars, song_at) */
+     uint32_t gen;                                  /* any change (the page redraws) */
+ } bk;
+@@ -74,15 +48,11 @@
+ static uint8_t bk_bufc;                            /* the chunk + 1 bk_buf holds whole (0: none, or changed; a backup's
+                                                     * LIST reads a chunk in, its GETs read on: bank_chunk) */
+ 
+-#if BOARD_SMK37
+-/* (SMK-37 Pro) twenty sectors in a row in USRFLASH, after the user sample slot (fm1_flash_map.h FL_BANK); the first
+- * erase there releases the stock mapping's marker (storage.c st_stock_release) */
+-_Static_assert(FL_BANK_HI - FL_BANK_LO == BK_NSECT * 0x1000u && FL_BANK_LO >= FL_SMP_LO && FL_BANK_HI <= FL_SMP_HI,
+-               "SMK: the pattern pool's sectors");
+-static uint32_t bk_sector(uint32_t i) { return FL_BANK_LO + i % BK_NSECT * 0x1000u; }
+-#else
+-static uint32_t bk_sector(uint32_t i) { return i < 2u ? 0xE7000u + i * 0x1000u : 0xEA000u + (i - 2u) * 0x1000u; }
+-#endif
++static uint32_t bk_sector(uint32_t i) { return 0x100000u + i * 0x1000u; }
++static uint32_t bk_legacy_sector(uint32_t i)
++{
++    return i < 2u ? 0xE7000u + i * 0x1000u : 0xEA000u + (i - 2u) * 0x1000u;
++}
+ static uint32_t bk_chunk(uint32_t id) { return id % BK_POOL / BK_PER; }
+ 
+ #if FELUCCA_FLASH
+@@ -90,26 +60,6 @@
+ static int bk_read(uint32_t off, void *d, uint32_t n) { return st_read(off, d, n); }
+ static int bk_erase(uint32_t off) { return st_erase(off); }
+ static int bk_prog(uint32_t off, const void *s, uint32_t n) { return st_prog(off, s, n); }
+-#elif defined(BK_RAM)
+-#define BK_ON 1
+-static uint8_t bk_ram[BK_NSECT][0x1000];
+-static uint8_t *bk_at(uint32_t off)
+-{
+-#if BOARD_SMK37
+-    uint32_t i = (off - FL_BANK_LO) >> 12;
+-#else
+-    uint32_t i = off < 0xEA000u ? (off - 0xE7000u) >> 12 : ((off - 0xEA000u) >> 12) + 2u;
+-#endif
+-    return &bk_ram[i % BK_NSECT][off & 0xFFFu];
+-}
+-static int bk_read(uint32_t off, void *d, uint32_t n) { memcpy(d, bk_at(off), n); return 0; }
+-static int bk_erase(uint32_t off) { memset(bk_at(off), 0xFF, 0x1000u); return 0; }
+-static int bk_prog(uint32_t off, const void *s, uint32_t n)
+-{
+-    uint8_t *p = bk_at(off);
+-    for (uint32_t i = 0; i < n; i++) p[i] &= ((const uint8_t *)s)[i];
+-    return 0;
+-}
+ #else
+ #define BK_ON 0
+ static int bk_read(uint32_t off, void *d, uint32_t n) { (void)off; (void)d; (void)n; return -1; }
+@@ -134,10 +84,69 @@
+     uint32_t r;
+     for (r = 0; r < BK_PER; r++) {
+         const uint8_t *p = bk_buf + r * BK_REC;
+-        int32_t len = (int32_t)p[2] - 64;
+-        bk.len[c % BK_CHUNKS * BK_PER + r] = (uint8_t)(!bk_ver(p[0]) ? 0 : len < 1 ? 1 : len > (int32_t)NSTEP ? NSTEP : len);
++        bk.len[c % BK_CHUNKS * BK_PER + r] = bk_ver(p[0]) ? 1u + p[2] : 0u;
+         bk.div[c % BK_CHUNKS * BK_PER + r] = (uint8_t)(p[3] >= 64u && p[3] < 74u ? p[3] - 64u : 2u);
+     }
++}
++
++/* Look up original committed chunks without altering their bytes. */
++static void bk_legacy_boot(void)
++{
++    uint8_t payload[4u * 888u];
++    uint32_t sequences[16] = {0};
++    for (uint32_t sector = 0; sector < 20u; sector++) {
++        uint32_t off = bk_legacy_sector(sector);
++        bk_hdr_t header;
++        if (bk_read(off, &header, sizeof header) || header.magic != 0x31424B53u ||
++            header.chunk >= 16u || header.len != sizeof payload ||
++            header.hsum != proj_hash(&header, sizeof header - 4u) ||
++            (bk.legacy_sect[header.chunk] && !bk_newer(header.seq, sequences[header.chunk])) ||
++            bk_read(off + 256u, payload, sizeof payload) ||
++            header.sum != proj_hash(payload, sizeof payload))
++            continue;
++        bk.legacy_sect[header.chunk] = (uint8_t)(sector + 1u);
++        sequences[header.chunk] = header.seq;
++        for (uint32_t i = 0; i < 4u; i++) {
++            const uint8_t *p = payload + i * 888u;
++            unsigned id = 4u * header.chunk + i;
++            bk.len[id] = p[0] >= 1u && p[0] <= 3u ? clamp((int32_t)p[2] - 64, 1, 64) : 0;
++            bk.div[id] = p[3] >= 64u && p[3] < 74u ? p[3] - 64u : 2u;
++        }
++    }
++}
++
++static int bk_legacy_read(uint32_t id, uint8_t *out)
++{
++    unsigned sector = bk.legacy_sect[id / 4u];
++    uint8_t raw[888];
++    memset(out, 0, BK_REC);
++    if (!sector || !bk.len[id]) return 0;
++    if (bk_read(bk_legacy_sector(sector - 1u) + 256u + id % 4u * sizeof raw, raw, sizeof raw))
++        return 1;
++    if (raw[0] < 1u || raw[0] > 3u || (raw[7] & 127u) > MOTION_MAX)
++        return 1;
++    memcpy(out, raw, BK_STEPS + 64u * 9u);
++    out[0] = BK_VER;
++    out[2] = (uint8_t)(bk.len[id] - 1u);
++    step_t empty = {0};
++    step_clear(&empty);
++    for (unsigned step = 64u; step < NSTEP; step++)
++        (void)step_put9(out + BK_STEPS + step * 9u, &empty);
++    memcpy(out + BK_NUDGE, raw + 584u, 48u);
++    for (unsigned i = 0; i < (raw[7] & 127u); i++) {
++        const uint8_t *old = raw + 632u + i * 4u;
++        uint8_t *record = out + BK_MOT + i * 4u;
++        record[0] = old[0] & 63u;
++        record[1] = (old[1] & 127u) | ((old[0] & 64u) << 1);
++        const int16_t value = (int16_t)(old[2] | (uint16_t)old[3] << 8);
++        if (value < -64 || value > 127) {
++            out[7] &= 128u;  /* Stock drops corrupt automation but keeps the steps. */
++            break;
++        }
++        record[2] = old[2];
++        record[3] = old[1] >> 7;
++    }
++    return 0;
+ }
+ 
+ /* persist_boot (main.c): each chunk's newest copy whose payload checks (a torn or damaged one: the copy before) */
+@@ -151,6 +160,7 @@
+     bk_bufc = 0;
+     if (!BK_ON)
+         return;
++    bk_legacy_boot();
+     for (i = 0; i < BK_NSECT; i++) {
+         ok[i] = bk_head(i, &h[i]) == 0;
+         if (ok[i] && (bk.top == 0u || bk_newer(h[i].seq, bk.top)))
+@@ -221,40 +231,31 @@
+  * automation on or not: 0 for a step no format can hold (none the UI makes) */
+ static int bk_pack_raw(uint8_t *r, uint32_t k, const step_t *st, const int16_t *tv, const motion_store_t *ms, int on)
+ {
+-    uint32_t i, n = 0, np = PROJ_NP, ties = 0;
+-    /* ((Skiff phase 9) the motion's ids as a store of PROJ_NP has them, which firmware before reads; today's when it
+-     * names a parameter added since) */
+-    for (i = 0; i < ms->count && i < MOTION_MAX; i++)
+-        if ((ms->event[i].place >> 6) == k && MOTION_ID(&ms->event[i]) >= PROJ_NP - 8u && MOTION_ID(&ms->event[i]) < P_E0)
+-            np = P_COUNT;
++    uint32_t i, n = 0, np = P_COUNT;
+     memset(r, 0, BK_REC);
+     r[0] = BK_VER;
+     r[1] = (uint8_t)np;
+-    for (i = 0; i < 5u; i++)
++    if (tv[0] < 1 || tv[0] > (int32_t)NSTEP) return 0;
++    r[2] = (uint8_t)(tv[0] - 1);
++    for (i = 1; i < 5u; i++)
+         r[2u + i] = (uint8_t)(tv[i] + 64);
+     for (i = 0; i < NSTEP; i++) {
+         if (!step_put9(r + BK_STEPS + i * 9u, &st[i]))
+             return 0;
+-        ties |= step_ties(&st[i]);
+     }
+     nudge_pack(r + BK_NUDGE, st, NSTEP);
+     for (i = 0; i < ms->count && n < MOTION_MAX; i++) {
+         const motion_event_t *e = &ms->event[i];
+         uint8_t *m = r + BK_MOT + n * 4u;
+-        if ((e->place >> 6) != k)
++        if (MOTION_TRACK(e->place) != k)
+             continue;
+-        uint32_t id = np == P_COUNT || MOTION_ID(e) < P_E0 ? MOTION_ID(e) : MOTION_ID(e) - PROJ_ESHIFT;
+-        m[0] = (uint8_t)((e->place & 63u) | (id >> 7) << 6);   /* ((1.3) the id's bit 7: BK_VER2) */
+-        m[1] = (uint8_t)((id & 127u) | (e->lock ? MOTION_LOCK : 0u));
+-        if (id > 127u)
+-            r[0] = BK_VER2;
++        m[0] = (uint8_t)MOTION_STEP(e->place);
++        m[1] = (uint8_t)MOTION_ID(e);
+         m[2] = (uint8_t)e->value;
+-        m[3] = (uint8_t)((uint16_t)e->value >> 8);
++        m[3] = e->lock;
+         n++;
+     }
+     r[7] = (uint8_t)(n | (on ? 128u : 0u));
+-    if (ties)
+-        r[0] = BK_VER3;                            /* ((2.0) its ids as BK_VER2's too) */
+     return 1;
+ }
+ /* track t's pattern as it is (the sound's own timing, its automation and locks) -> record r */
+@@ -271,10 +272,8 @@
+ static int bk_load(uint32_t c)
+ {
+     bk_bufc = 0;
+-    if (!bk.sect[c]) {
+-        memset(bk_buf, 0, BK_LEN);
+-        return 0;
+-    }
++    if (!bk.sect[c])
++        return bk_legacy_read(c, bk_buf) ? 2 : 0;
+     return bk_read(bk_sector(bk.sect[c] - 1u) + 256u, bk_buf, BK_LEN) ? 2 : 0;
+ }
+ /* record rec -> pattern id (rec 0: the pattern emptied): 0 done, 2 not (the transport runs, a flash error), 3 no flash */
+@@ -322,8 +321,11 @@
+     uint32_t i = pend_at(id), c = bk_chunk(id);
+     if (i < PEND_N)
+         memcpy(r, pend_rec[i], BK_REC);
+-    else if (!bk.len[id % BK_POOL] || !bk.sect[c] ||
+-             bk_read(bk_sector(bk.sect[c] - 1u) + 256u + id % BK_PER * BK_REC, r, BK_REC))
++    else if (!bk.len[id % BK_POOL])
++        return 1;
++    else if (!bk.sect[c]) {
++        if (bk_legacy_read(id % BK_POOL, r)) return 1;
++    } else if (bk_read(bk_sector(bk.sect[c] - 1u) + 256u + id % BK_PER * BK_REC, r, BK_REC))
+         return 1;
+     return bk_ver(r[0]) && (r[7] & 127u) <= MOTION_MAX ? 0 : 1;
+ }
+@@ -410,10 +412,10 @@
+ static uint32_t pool_find(const uint8_t *r)
+ {
+     uint32_t id, i;
+-    int32_t len = (int32_t)r[2] - 64;
++    uint32_t len = r[2] + 1u;
+     for (id = 0; id < BK_POOL; id++) {
+         i = pend_at(id);
+-        if (!pool_used(id) || (i == PEND_N && bk.len[id] != (uint8_t)(len < 1 ? 1 : len > (int32_t)NSTEP ? NSTEP : len)))
++        if (!pool_used(id) || (i == PEND_N && bk.len[id] != len))
+             continue;
+         if (!pat_read(id, bk_buf) && !memcmp(bk_buf, r, BK_REC)) {
+             bk_bufc = 0;
+@@ -438,19 +440,20 @@
+         if (!step_get9(&st[i], r + BK_STEPS + i * 9u))
+             return 1;
+     nudge_unpack(st, r + BK_NUDGE, NSTEP);
+-    for (i = 0; i < 5u; i++)
++    v[0] = 1 + r[2];
++    for (i = 1; i < 5u; i++)
+         v[i] = (int16_t)param_fit(track_desc(t, BK_TIME[i]), (int32_t)r[2u + i] - 64);
+     memset(ms, 0, sizeof *ms);
+     ms->count = (uint8_t)(r[7] & 127u);
+     ms->on = (uint8_t)(r[7] & 128u ? 1u << tk : 0u);
+     for (i = out = 0; i < ms->count && i < MOTION_MAX; i++) {
+         const uint8_t *m = r + BK_MOT + i * 4u;
+-        int32_t val = (int16_t)(m[2] | (uint16_t)m[3] << 8);   /* (stored 16 bits: checked before it is a byte) */
+-        ms->event[i].place = (uint16_t)(tk << 6 | (m[0] & 63u));
+-        ms->event[i].id = (uint8_t)((m[1] & 127u) | (m[0] & 64u) << 1);   /* ((1.3) bit 7: BK_VER2's; 0 before) */
+-        ms->event[i].lock = m[1] >> 7;
++        int32_t val = (int8_t)m[2];
++        ms->event[i].place = MOTION_PLACE(tk, m[0]);
++        ms->event[i].id = m[1];
++        ms->event[i].lock = m[3] & 1u;
+         ms->event[i].value = (int8_t)val;
+-        out |= val < -64 || val > 127;
++        out |= val < -64 || m[3] > 1u;
+     }
+     if (out || !proj_motion_ids(ms, r[1]) || !motion_valid(ms))
+         ms->count = 0;                             /* (motion no firmware wrote: the steps still load) */
+@@ -463,13 +466,11 @@
+ static uint32_t pool_len(uint32_t id)               /* pattern id's LEN, 0 empty (a waiting copy's first) */
+ {
+     uint32_t i = pend_at(id);
+-    int32_t len;
+     if (i == PEND_N)
+         return bk.len[id % BK_POOL];
+     if (!bk_ver(pend_rec[i][0]))
+         return 0;
+-    len = (int32_t)pend_rec[i][2] - 64;
+-    return (uint32_t)(len < 1 ? 1 : len > (int32_t)NSTEP ? (int32_t)NSTEP : len);
++    return pend_rec[i][2] + 1u;
+ }
+ static int bank_used(uint32_t k, uint32_t e) { uint32_t id = ent_pat(k, e); return id != PAT_NONE && pool_used(id); }
+ static int ent_on(uint32_t k, uint32_t e) { return bank_used(k, e) || ent_rest(k, e); }   /* (#28) a pattern or a REST */
+@@ -625,7 +626,7 @@
+     id = ent_pat(k, *e2);
+     if (id == PAT_NONE || id == trk_pat(k) || pat_read(id, bk_rec) || bk_rec[6] != DIR_FWD + 64u)
+         return PAT_NONE;
+-    *un = bk_rec[2] - 64u < CT_N ? bk_rec[2] - 64u : CT_N;
++    *un = bk_rec[2] + 1u;
+     memset(u, 0, CT_N * sizeof *u);
+     for (i = 0; i < *un; i++)
+         if (!step_get9(&u[i], bk_rec + BK_STEPS + i * 9u))
+@@ -653,17 +654,17 @@
+  * last (the part's last step unfolded; 0 none): a tail of a pitch not sounding there goes too (a note deleted, moved,
+  * shortened). Written: the record waiting to be kept (pat_keep_rec), its copy staged to come in the same. 0 done, 1 no
+  * next part, 2 no room for all of a tail (it goes as far as it can) */
+-static int chain_tails(uint32_t k, const step_t *last, uint32_t cnt, const uint8_t *o, const uint8_t *p, const uint8_t *n)
++static int chain_tails(uint32_t k, const step_t *last, uint32_t cnt, const uint8_t *o, const uint8_t *p, const uint16_t *n)
+ {
+     step_t u[CT_N];
+-    uint8_t l[4];
++    uint16_t l[4];
+     uint32_t e2, un, id, i, j, ch = 0;
+     int rc = 0;
+     launch_t *q = &launch_q[k % NTRK];
+     if ((id = chain_next(k, &e2, u, &un)) == PAT_NONE)
+         return 1;
+     for (i = 0; i < cnt && i < 4u; i++) {
+-        l[i] = (uint8_t)tail_len(u, un, o[i]);
++        l[i] = (uint16_t)tail_len(u, un, o[i]);
+         tail_out(u, un, o[i]);
+         ch |= l[i];
+     }
+@@ -684,7 +685,6 @@
+     for (i = 0; i < un; i++)
+         if (!step_put9(bk_rec + BK_STEPS + i * 9u, &u[i]))
+             return 2;
+-    bk_rec[0] = BK_VER3;                           /* (ties in it) */
+     if (pat_keep_rec(id, bk_rec))
+         return 2;
+     if (q->armed && q->slot == e2 && !q->done) {   /* (playing: the copy coming in next, the same) */
+@@ -708,7 +708,7 @@
+ /* (2.0, #44) a knob move into store ms (a part's own automation, not the track's: as motion_put): 1 no room */
+ static uint32_t ms_put(motion_store_t *ms, const track_t *t, uint32_t step, uint32_t id, int16_t v)
+ {
+-    uint32_t i, place = trk_index(t) << 6 | step;
++    uint32_t i, place = MOTION_PLACE(trk_index(t), step);
+     const param_desc_t *d;
+     if (step >= NSTEP || !motion_param(id))
+         return 0;
+@@ -1496,7 +1496,7 @@
+  * factory[15][17]; (2.0) settings_persist.c clears them from a record of before Skiff's mark at [15][24]) */
+ #define SCENES 16u
+ #define SCENE_MEM(i) (lists.scene[(i)])
+-_Static_assert(5u * SCENES + 2u == PROJ_SCENES && 3u * SCENES + 2u == PROJ_SC2, "the scenes' bytes");
++_Static_assert(7u * SCENES + 2u == PROJ_SCENES && 3u * SCENES + 2u == PROJ_SC2, "the scenes' bytes");
+ static uint8_t scene_last = 0xFFu;                 /* the scene recalled or stored last (its key lit); 0xFF none */
+ static void scene_forget(void) { scene_last = 0xFFu; }   /* (a project load: its own scenes) */
+ static uint32_t scene_bits(uint32_t s)
+@@ -1515,8 +1515,11 @@
+         b = scene_bits(s);
+         return ((b >> (5u * k)) & 31u) | ((b >> (20u + k)) & 1u) << 5;
+     }
+-    b = SCENE_MEM(50u + 2u * s) | (uint32_t)SCENE_MEM(51u + 2u * s) << 8;
+-    return b >> 15 ? ((b >> (5u * (k - 4u))) & 31u) | ((b >> (6u + k)) & 1u) << 5 : SCENE_NOT;
++    const unsigned pair = (k - 4u) / 2u;
++    const unsigned slot = (k - 4u) % 2u;
++    const unsigned at = 50u + 2u * (s + pair * SCENES);
++    b = SCENE_MEM(at) | (uint32_t)SCENE_MEM(at + 1u) << 8;
++    return b >> 15 ? ((b >> (5u * slot)) & 31u) | ((b >> (10u + slot)) & 1u) << 5 : SCENE_NOT;
+ }
+ /* track k's entry in scene s: 0..15; BK_NONE: none (or a code no firmware wrote) */
+ static uint32_t scene_slot(uint32_t s, uint32_t k)
+@@ -1528,21 +1531,26 @@
+ /* the tracks as they are now into scene s: the entry each is on (bank_cur; none: on no entry's pattern), each MUTE */
+ static void scene_store(uint32_t s)
+ {
+-    uint32_t v = 0, h = 1u << 15, k, m;
++    uint32_t v = 0, pairs[2] = {1u << 15, 1u << 15}, k, m;
+     s %= SCENES;
+     for (k = 0; k < NTRK; k++) {
+         uint32_t c = bank_cur(k), mu = trk[k].p[P_MUTE] != 0;
+         c = c < BK_SLOTS ? c + 1u : 0u;
+         if (k < 4u)
+             v |= c << (5u * k) | mu << (20u + k);
+-        else
+-            h |= c << (5u * (k - 4u)) | mu << (6u + k);
++        else {
++            unsigned slot = (k - 4u) % 2u;
++            pairs[(k - 4u) / 2u] |= c << (5u * slot) | mu << (10u + slot);
++        }
+     }
+     SCENE_MEM(3u * s) = (uint8_t)v;
+     SCENE_MEM(3u * s + 1u) = (uint8_t)(v >> 8);
+     SCENE_MEM(3u * s + 2u) = (uint8_t)(v >> 16);
+-    SCENE_MEM(50u + 2u * s) = (uint8_t)h;
+-    SCENE_MEM(51u + 2u * s) = (uint8_t)(h >> 8);
++    for (unsigned pair = 0; pair < 2u; pair++) {
++        unsigned at = 50u + 2u * (s + pair * SCENES);
++        SCENE_MEM(at) = (uint8_t)pairs[pair];
++        SCENE_MEM(at + 1u) = (uint8_t)(pairs[pair] >> 8);
++    }
+     m = SCENE_MEM(48u) | (uint32_t)SCENE_MEM(49u) << 8 | 1u << s;
+     SCENE_MEM(48u) = (uint8_t)m;
+     SCENE_MEM(49u) = (uint8_t)(m >> 8);
+@@ -1700,7 +1708,8 @@
+ {
+     step_t e;
+     uint32_t i;
+-    for (i = 0; t && i < 5u; i++)                  /* ((2.0.2) GATE the default, 1 STEP: the track's can be a 1.x
++    if (t) r[2] = (uint8_t)(motion_base_value(t, P_SLEN) - 1);
++    for (i = 1; t && i < 5u; i++)                  /* ((2.0.2) GATE the default, 1 STEP: the track's can be a 1.x
+                                                     * pattern's 50 %) */
+         r[2u + i] = (uint8_t)((BK_TIME[i] == P_SGATE ? TP[P_SGATE].def : motion_base_value(t, BK_TIME[i])) + 64);
+     memset(&e, 0, sizeof e);
+@@ -2139,7 +2148,7 @@
+             for (i = used = 0; i < NSTEP; i++)
+                 used |= p->t[k].step[i].n | p->t[k].step[i].hit;
+             for (i = 0; i < p->motion.count; i++)
+-                used |= (p->motion.event[i].place >> 6) == k;
++                used |= MOTION_TRACK(p->motion.event[i].place) == k;
+             if (!used || p->t[k].preset == PROJ_DEF_SOUND)
+                 continue;                          /* (empty, or its steps cleared when it loads: no pattern) */
+             for (i = 0; i < 5u; i++)
+--- a/firmware/src/core.h
++++ b/firmware/src/core.h
+@@ -1,7 +1,7 @@
+ /* SPDX-License-Identifier: GPL-3.0-only
+  * Copyright (C) 2026 Leo Kuroshita (@kurogedelic), Hügelton Instruments */
+ /* FELUCCA core types: tracks, voices, engines, parameters.
+- * Six tracks (T5, T6 light: engines.c eng_allowed), each a synth part: its own engine, preset, parameters, voices and 64-step
++ * Eight tracks (T5–T8 light: engines.c eng_allowed), each a synth part: its own engine, preset, parameters, voices and 256-step
+  * pattern. The parts share one budget of NVOICE sounding voices (voice.c). Drums are the DRUM
+  * engine (General MIDI map) on any part; the SAMPLE engine's PERC set is retired (drum_from_perc).
+  * Sections: sizes, parameters, voices and engines, tracks and the song, system. */
+@@ -10,10 +10,15 @@
+ /* ------------------------------------------------------------ sizes --- */
+ #define NVOICE 16                /* voices per part ((2.5) 16: a chord's tails and the next chord, 8 before); the budget
+                                   * shared by all parts: VOICES_1CORE, VOICES_2CORE */
+-#define VOICES_1CORE 8u          /* (2.5) the shared budget with one core (NVOICE's 8 before) */
++#define VOICES_1CORE 10u          /* eight protected parts and two additional voices */
+ #define UNI_NV 8u                /* (2.5) UNISON's voices at most (mono_play: its spread and level as before) */
+-#define NTRK 6                   /* tracks (the formats and the protocol count these): every track is a part;
+-                                  * (Skiff phase 6) T5 and T6 light (NHEAVY) */
++#define NTRK 8                   /* tracks (the formats and the protocol count these): every track is a part;
++                                  * (Skiff phase 6) T5–T8 light (NHEAVY) */
++#define TRACK_KEY_COUNT 6u
++static uint32_t track_origin_of(uint32_t selected)
++{
++    return selected < TRACK_KEY_COUNT ? 0u : selected + 1u - TRACK_KEY_COUNT;
++}
+ #define NPART NTRK               /* synth parts: tracks 1..NTRK */
+ #ifndef FELUCCA_CPU2
+ #define FELUCCA_CPU2 1           /* (Skiff 1.3) the second core (src/felucca.c): 1 = built in, MENU > CPU 2 CORES lets it
+@@ -43,7 +48,34 @@
+ #endif
+ _Static_assert(NTRK <= 8 && NPART < VOICES_1CORE && VOICES_2CORE <= NVOICE * NPART,
+                "a track mask is a uint8_t; each part protects one voice (voice.c)");
+-#define NSTEP 64
++#define NSTEP 256
++
++typedef struct { uint32_t word[NSTEP / 32u]; } step_mask_t;
++#define STEP_MASK_EMPTY ((step_mask_t){{0}})
++static inline uint32_t step_mask_has(step_mask_t m, uint32_t i)
++{
++    return (m.word[i / 32u] >> (i % 32u)) & 1u;
++}
++static void step_mask_set(step_mask_t *m, uint32_t i)
++{
++    m->word[i / 32u] |= 1u << (i % 32u);
++}
++static void step_mask_clear(step_mask_t *m, uint32_t i)
++{
++    m->word[i / 32u] &= ~(1u << (i % 32u));
++}
++static uint32_t step_mask_any(step_mask_t m)
++{
++    uint32_t any = 0;
++    for (uint32_t i = 0; i < NSTEP / 32u; i++)
++        any |= m.word[i];
++    return any;
++}
++static void step_mask_remove(step_mask_t *m, step_mask_t remove)
++{
++    for (uint32_t i = 0; i < NSTEP / 32u; i++)
++        m->word[i] &= ~remove.word[i];
++}
+ #define HALF_FRAMES 128          /* I2S half buffer: 2.9 ms at 44.1 kHz (a key waits 0..1 half, then plays 1 half later) */
+ #define DAC_TICKS 544u           /* TIMER4 ticks per I2S frame (24 MHz / 44,117.6 Hz): (2.2) MIDI OUT's times (usb.c mo) */
+ #ifndef AUDIO_RAM
+@@ -447,7 +479,7 @@
+         s->flags |= SF_FLAM;
+ }
+ #define MOTION_MAX 64u
+-/* place: track << 6 | step ((Skiff phase 6) 9 bits: up to eight tracks x 64 steps); the stored formats of before
++/* Expanded runtime place: track << 8 | step. The stored formats of before
+  * hold it in a byte (four tracks: project.c proj_mot_put, the pattern records only the step). value: the parameter's
+  * value, -64..127 (motion_valid, motion_put: what a project's byte holds), so one byte.
+  * id: the P_* id, 0..254 ((Skiff 1.3) it was 7 bits, the lock bit 7 of the same byte: P_COUNT passed 127). lock (1.1):
+@@ -457,7 +489,11 @@
+  * step byte (bank.c BK_VER2). The record stays 4 bytes: every copy (launch, undo, the tools) the size it was */
+ #define MOTION_LOCK 0x80u                       /* (the stored id byte's lock bit; motion_put's kind) */
+ #define MOTION_ID(e) ((uint32_t)(e)->id)
+-typedef struct { uint16_t place : 9, lock : 1, : 6; uint8_t id; int8_t value; } motion_event_t;
++#define MOTION_PLACE(k, s) (((uint32_t)(k) << 8) | (uint32_t)(s))
++#define MOTION_TRACK(p) ((uint32_t)(p) >> 8)
++#define MOTION_STEP(p) ((uint32_t)(p) & 255u)
++#define MOTION_PLACE_NONE (NTRK * NSTEP)
++typedef struct { uint16_t place : 12, lock : 1, : 3; uint8_t id; int8_t value; } motion_event_t;
+ typedef struct { uint8_t count, on, rsv[2]; motion_event_t event[MOTION_MAX]; } motion_store_t;
+ _Static_assert(sizeof(motion_store_t) == 260u, "motion: a record is 4 bytes");
+ #define CHAIN_ROWS 16u
+@@ -471,7 +507,8 @@
+                                           * project holding it: firmware before refuses it, as a REST) */
+ #define REPS_CHAIN 16u                 /* (2.0, #44, 3A) an entry's REPS byte (0..15: 1x..16x): on CHAIN into the next
+                                         * (bank.c ent_block); firmware before refuses a project holding one */
+-#define PROJ_SCENES 82u                /* the 16 scenes as bank.c keeps them: 3 bytes each, then a used mask, then
++#define PROJ_SCENES_LEGACY 82u
++#define PROJ_SCENES 114u                /* the 16 scenes as bank.c keeps them: 3 bytes each, then a used mask, then
+                                         * (Skiff phase 6) 2 bytes each for T5 and T6 */
+ typedef struct {
+     uint8_t count, rsv[3];
+@@ -507,27 +544,27 @@
+     step_t step[NSTEP];
+     uint32_t seq_pos;            /* q8 samples into the current step */
+     uint16_t seq_idx;
+-    uint8_t seq_cnt;             /* (Skiff) steps of the pass so far (0: none yet, a run starts: PLAY, a song row); seq_next */
++    uint16_t seq_cnt;             /* (Skiff) steps of the pass so far (0: none yet, a run starts: PLAY, a song row); seq_next */
+     uint8_t seq_down;            /* (Skiff) DIR PING: on its way down */
+     uint8_t seq_notes[4 + NLANE];   /* sounding seq notes (the step's notes, then its hits) */
+     uint8_t seq_n;
+     uint8_t seq_hold;            /* last step slides: keep the notes until the next step */
+     uint8_t slide_glide;         /* next legato note glides (slide) */
+     uint8_t rat_left;            /* RATCH: repeats of the playing step still to come (seq.c seq_ratchet) */
+-    uint8_t fire_idx;            /* (Skiff) the step played last (NUDGE: not always seq_idx): its RATCH parts, FLAM */
++    uint16_t fire_idx;            /* (Skiff) the step played last (NUDGE: not always seq_idx): its RATCH parts, FLAM */
+     uint8_t nud;                 /* (Skiff) NUDGE: NUD_LATE, NUD_EARLY, NUD_DONE (seq.c seq_enter) */
+-    uint8_t early_idx;           /* (Skiff) NUD_EARLY / NUD_DONE: the next step, played early */
++    uint16_t early_idx;           /* (Skiff) NUD_EARLY / NUD_DONE: the next step, played early */
+     uint32_t late_at, early_at;  /* (Skiff) the seq_pos the playing step (late) / the next (early) plays at */
+     uint32_t rat_pos;            /* (Skiff) samples since the step played last started, its nudge in: RATCH, FLAM */
+     uint32_t seq_off;
+     uint8_t seq_active;          /* any step programmed */
+-    uint8_t rskip_idx;           /* live recording put notes into the step about to play: */
++    uint16_t rskip_idx;           /* live recording put notes into the step about to play: */
+     uint8_t rskip_n, rskip[NLANE];   /* do not trigger them again there (they sound already) */
+     /* live recording of held notes (seq.c rec_hold): the steps they are held into become TIEs */
+     uint8_t rh_n, rh_note[4];    /* recorded notes still held, 0 = none */
+-    uint8_t rh_start;            /* the step they were recorded into */
+-    uint8_t rh_ties;             /* TIE steps written after it */
+-    uint8_t rh_last;             /* the last of them; rh_bak: what it held (an early release puts it back) */
++    uint16_t rh_start;            /* the step they were recorded into */
++    uint16_t rh_ties;             /* TIE steps written after it */
++    uint16_t rh_last;             /* the last of them; rh_bak: what it held (an early release puts it back) */
+     step_t rh_bak;
+     /* mono */
+     uint8_t mono_stack[8];
+@@ -576,8 +613,9 @@
+     int32_t batt_raw;            /* smoothed ADC ch3 (battery divider), 0 = not read yet */
+ } song_t;
+ 
+-static track_t trk[NTRK];        /* the instrument: six parts */
++static track_t trk[NTRK];        /* the instrument: eight parts */
+ static song_t song;
++static uint32_t track_key_origin(void) { return track_origin_of(song.sel); }
+ /* the selected track. (Skiff 2.0) A pointer kept with song.sel, so a use is a load, not song.sel times the track's
+  * size: song.sel is only ever set through sel_set (the tests too) */
+ static track_t *tsel = trk;
+--- a/firmware/src/editor.c
++++ b/firmware/src/editor.c
+@@ -24,6 +24,8 @@
+ enum { ED_KIT_GET = 74, ED_KIT_PUT };                 /* (Skiff W3) the DRUM-X kit (INFO 4B 01 8) */
+ enum { ED_SMP_MIX = 81 };                             /* (Skiff, #21) a user slot's sounds' LEVEL REV DLY (INFO 57 01 bit 5) */
+ 
++/* Legacy SysEx editor indexes and motion records still address the first 64 steps. */
++#define ED_NSTEP 64u
+ static uint8_t ed_out[600];
+ static uint32_t ed_n;
+ 
+@@ -161,7 +163,7 @@
+     uint32_t pos, last_ms, run_ms, resets;
+     int16_t v[ED_NV];                                    /* TSEL->p[], then song.g[] */
+     uint16_t t[ED_NV];                                   /* ms (low 16 bits) of the last push */
+-    uint32_t st[NSTEP];                                  /* step signatures */
++    uint32_t st[ED_NSTEP];                                  /* step signatures */
+     int16_t tv[ED_NT];                                   /* v4: trk[k].p[ED_TIDS[j]] at k * 3 + j */
+     uint16_t tt[ED_NT];
+     uint32_t tpos;
+@@ -180,7 +182,7 @@
+     uint32_t i;
+     for (i = 0; i < ED_NV; i++)
+         ed_w.v[i] = *ed_val(i);
+-    for (i = 0; i < NSTEP; i++)
++    for (i = 0; i < ED_NSTEP; i++)
+         ed_w.st[i] = ed_step_sig(&TSEL->step[i]);
+     for (i = 0; i < ED_NT; i++)
+         ed_w.tv[i] = trk[i / 3u].p[ED_TIDS[i % 3u]];
+@@ -246,7 +248,7 @@
+         ed_send();
+         return;
+     }
+-    for (i = 0; i < NSTEP && n < ED_PUSH_MAX; i++) {
++    for (i = 0; i < ED_NSTEP && n < ED_PUSH_MAX; i++) {
+         uint32_t h = ed_step_sig(&TSEL->step[i]);
+         if (h == ed_w.st[i])
+             continue;
+@@ -396,15 +398,17 @@
+ static void ed_motion_reply(uint32_t k, uint32_t rc, uint32_t kinds)
+ {
+     track_t *t = &trk[k];
+-    uint32_t i;
+-    ed_b(k); ed_b(rc); ed_b(motion_enabled(t)); ed_b(motion_count(t)); ed_b(MOTION_MAX);
++    uint32_t i, n = 0;
++    for (i = 0; i < motion.count; i++)
++        n += MOTION_TRACK(motion.event[i].place) == k && MOTION_STEP(motion.event[i].place) < ED_NSTEP;
++    ed_b(k); ed_b(rc); ed_b(motion_enabled(t)); ed_b(n); ed_b(MOTION_MAX);
+     for (i = 0; i < motion.count; i++) {
+         const motion_event_t *e = &motion.event[i];
+-        if ((e->place >> 6) != k) continue;
+-        ed_b((e->place & 63u) | (MOTION_ID(e) >> 7) << 6); ed_b(MOTION_ID(e)); ed_v(e->value);   /* ((1.3) id bit 7) */
++        if (MOTION_TRACK(e->place) != k || MOTION_STEP(e->place) >= ED_NSTEP) continue;
++        ed_b((MOTION_STEP(e->place)) | (MOTION_ID(e) >> 7) << 6); ed_b(MOTION_ID(e)); ed_v(e->value);   /* ((1.3) id bit 7) */
+     }
+     for (i = 0; kinds && i < motion.count; i++)
+-        if ((motion.event[i].place >> 6) == k)
++        if (MOTION_TRACK(motion.event[i].place) == k && MOTION_STEP(motion.event[i].place) < ED_NSTEP)
+             ed_b(motion.event[i].lock);
+ }
+ static int ed_args_ok(uint32_t cmd, const uint8_t *a, uint32_t n)
+@@ -522,11 +526,24 @@
+             /* (the query with the kinds) */
+         } else if (na > 1u) {
+             if (a[1] == 1u) motion_set_enabled(t, a[2]);
+-            else if (a[1] == 2u) { load_begin(t, UNDO_PAT); motion_clear(t); load_end(t); }
++            else if (a[1] == 2u || (a[1] == 6u && a[2] == 127u)) {
++                for (i = 0; i < motion.count; i++)
++                    if (MOTION_TRACK(motion.event[i].place) == a[0] && MOTION_STEP(motion.event[i].place) >= ED_NSTEP &&
++                        (a[1] == 2u || motion.event[i].lock))
++                        break;
++                if (i < motion.count)
++                    rc = 1;
++                else if (a[1] == 2u) {
++                    load_begin(t, UNDO_PAT);
++                    motion_clear(t);
++                    load_end(t);
++                } else
++                    (void)motion_clear_locks(t, NSTEP);
++            }
+             else if (a[1] == 3u) rc = motion_set_event(t, a[2] & 63u, ED_MID(a), (int16_t)ed_rv(a + 4));
+             else if (a[1] == 4u && motion_param(ED_MID(a))) motion_delete_event(t, a[2] & 63u, ED_MID(a));
+             else if (a[1] == 5u) rc = motion_set_lock(t, a[2] & 63u, ED_MID(a), (int16_t)ed_rv(a + 4));
+-            else if (a[1] == 6u && (a[2] < NSTEP || a[2] == 127u)) (void)motion_clear_locks(t, a[2]);
++            else if (a[1] == 6u && a[2] < ED_NSTEP) (void)motion_clear_locks(t, a[2]);
+             else rc = 1;
+             ui.force = 1;
+         }
+@@ -562,7 +579,7 @@
+         ed_b(NENGINES);
+         ed_b(P_COUNT > 127u ? 127u : P_COUNT);            /* ((1.3) more: INFO 49 01) */
+         ed_b(G_COUNT);
+-        ed_b(NSTEP);
++        ed_b(ED_NSTEP);
+         ed_b(P_E0 > 127u ? 127u : P_E0);
+         for (i = 0; i < NENGINES; i++)
+             ed_str(ENGINES[i]->name, 8);
+@@ -635,7 +652,7 @@
+     case ED_STEP_GET:
+     case ED_STEP_SET: {
+         step_t *st;
+-        if (na < 1u || a[0] >= NSTEP)
++        if (na < 1u || a[0] >= ED_NSTEP)
+             return;
+         st = &TSEL->step[a[0]];
+         if (cmd == ED_STEP_SET && na >= 9u) {
+@@ -932,7 +949,7 @@
+     }
+     case ED_TRACK_STEP: {                                  /* track, index [, step] -> track, index, step (as STEP_GET) */
+         step_t *st;
+-        if (na < 2u || a[0] >= NTRK || a[1] >= NSTEP)
++        if (na < 2u || a[0] >= NTRK || a[1] >= ED_NSTEP)
+             return;
+         st = &trk[a[0]].step[a[1]];
+         if (na >= 10u)
+--- a/firmware/src/engines.c
++++ b/firmware/src/engines.c
+@@ -172,6 +172,9 @@
+ }
+ 
+ /* the parts at power-on (engine, preset; the sequencers empty): bass, pad, lead, drums, (phase 6) a sample sound
+- * and a second kit: ANALOG ACID, FM6 PAD (was DIGITAL PAD), LOFI PULSE LD, DRUM KIT, PIANO, DRUM KIT */
+-static const uint8_t TRK_DEF[NPART][2] = {{0, 4}, {ENGI_FM6, 4}, {3, 0}, {ENGI_DRUM, 0}, {ENGI_SAMPLE, 0}, {ENGI_DRUM, 0}};
++ * and a second kit: ANALOG ACID, FM6 PAD (was DIGITAL PAD), LOFI PULSE LD, DRUM KIT, PIANO, DRUM KIT. */
++static const uint8_t TRK_DEF[NPART][2] = {
++    {0, 4}, {ENGI_FM6, 4}, {3, 0}, {ENGI_DRUM, 0},
++    {ENGI_SAMPLE, 0}, {ENGI_DRUM, 0}, {ENGI_SAMPLE, 0}, {ENGI_DRUM, 0},
++};
+ static uint32_t trk_def_engine(uint32_t i) { return TRK_DEF[i % NPART][0]; }
+--- a/firmware/src/gfx.c
++++ b/firmware/src/gfx.c
+@@ -124,7 +124,7 @@
+ static struct {
+     uint16_t bg, surf, text, theme, accent;
+     uint16_t mid, dim, line, sel, tint, ink, rec, raise, key, lane, grid;
+-    uint16_t trk[UI_NTRK];       /* the tracks' colours (UI_TRACKS; a palette without its own: THEME) */
++    uint16_t trk[NTRK];       /* the tracks' colours (UI_TRACKS; a palette without its own: THEME) */
+     uint8_t light, crypt, neon;  /* (Skiff) THEME CRYPT, its own font and widgets (C2, C3); NEON, CRYPT's font and its
+                                   * own widgets (design/mock_neon.py) */
+     uint8_t quark;               /* (Skiff) THEME QUARK: Skiff's font, its own widgets (design/mock_quark.py) */
+@@ -134,7 +134,7 @@
+ /* The look (Skiff, DESIGN.md: BLOCKS; U2: the only one, FLAT and LINE retired): SURF tiles with square corners on the
+  * BG, no dividers; the knob just turned: its label row a band of the accent (ui_draw.c draw_column); track cushions in
+  * their tracks' colours; key names as words, no keycaps */
+-#define T_TRK(k) ux.trk[(k) % UI_NTRK]   /* track k's colour (always with its number: never the colour alone) */
++#define T_TRK(k) ux.trk[(k) % NTRK]   /* track k's colour (always with its number: never the colour alone) */
+ #define T_BG ux.bg               /* background */
+ #define T_SURF ux.surf           /* dialogs, menu rows, mixer strips */
+ #define T_TEXT ux.text           /* primary text */
+@@ -191,6 +191,8 @@
+         memcpy(&ux.bg, ux_cpal, 10u);            /* (BG .. ACCENT in a row) */
+         memcpy(ux.trk, ux_cpal + 10, 2u * UI_NTRK);
+     }
++    ux.trk[6] = ux_mix(ux.trk[0], ux.trk[3], 50);
++    ux.trk[7] = ux_mix(ux.trk[1], ux.trk[4], 50);
+     ux.mid = ux_mix(ux.bg, ux.text, UI_MID_PCT);
+     ux.dim = ux_mix(ux.bg, ux.text, UI_DIM_PCT);
+     ux.line = ux_mix(ux.bg, ux.text, UI_LINE_PCT);
+--- a/firmware/src/icons.c
++++ b/firmware/src/icons.c
+@@ -16,7 +16,7 @@
+  * keycaps are. (filled: kept for the callers; every cushion is filled) */
+ #define ICON_TRK 0xF0u                                /* + k (above ICON_COUNT, below ICON_AUTO) */
+ static uint32_t trk_icon(uint32_t k, int filled) { (void)filled; return ICON_TRK + k % NTRK; }
+-_Static_assert(NTRK <= UI_NTRK && ICON_TRK + NTRK <= 0xFEu,   /* ((Skiff phase 6) 0xFE: ICON_AUTO) */
++_Static_assert(ICON_TRK + NTRK <= 0xFEu,   /* ((Skiff phase 6) 0xFE: ICON_AUTO) */
+                "a colour (tools/gen_ui_palettes.py) and an icon id for every track");
+ /* (Skiff) BLOCKS: no cushion, the number alone in the track's colour, as the chosen mockup's HOME lanes and PERFORM
+  * (design/mock.py, B): in a 16 px cushion's place V (17 px figures), in a 12 px one's M (12 px); on a light ground (a
+--- a/firmware/src/launch.c
++++ b/firmware/src/launch.c
+@@ -140,7 +140,7 @@
+         q->motion.count = 0;
+         q->motion.on = (uint8_t)(motion.on & (1u << k));
+         for (i = 0, n = 0; i < motion.count; i++)
+-            if ((motion.event[i].place >> 6) == k)
++            if ((MOTION_TRACK(motion.event[i].place)) == k)
+                 q->motion.event[q->motion.count++] = motion.event[i];
+             else
+                 motion.event[n++] = motion.event[i];
+@@ -166,7 +166,7 @@
+     t->nud = 0;
+     t->rskip_n = 0;
+     if (carry) {                                   /* ((2.0, #44) a key held recording goes on into it, as into a */
+-        t->rh_start = 0xFFu;                       /* step: its first step ties it (seq.c rec_hold) */
++        t->rh_start = NSTEP;                       /* step: its first step ties it (seq.c rec_hold) */
+         t->rh_ties = 0;
+         memset(rec_n[k], 0, sizeof rec_n[k]);
+     } else
+--- a/firmware/src/menu_items.c
++++ b/firmware/src/menu_items.c
+@@ -24,13 +24,13 @@
+  * past MI_COUNT, so its setting stays and no tab shows it */
+ enum { MI_COLOR, MI_PHEAD, MI_LARGE, MI_ANIM, MI_SCROFF, MI_HINTS, MI_HOLD, MI_ACCEL, MI_BPMLOCK, MI_SCLLED, MI_PREVIEW,
+        MI_RETURN, MI_KEEPS, MI_KVEL, MI_LOWCUT, MI_USB, MI_CLICK, MI_CLKLVL, MI_COUNTIN, MI_TUNE, MI_CLOCK, MI_CLKOUT, MI_ROUTE,
+-       MI_AUTOCH, MI_TCH1, MI_TCH2, MI_TCH3, MI_TCH4, MI_TCH5, MI_TCH6, MI_NOTES, MI_CCOUT, MI_THRU, MI_REMOTE, MI_LEARN,
++       MI_AUTOCH, MI_TCH1, MI_TCH2, MI_TCH3, MI_TCH4, MI_TCH5, MI_TCH6, MI_TCH7, MI_TCH8, MI_NOTES, MI_CCOUT, MI_THRU, MI_REMOTE, MI_LEARN,
+        MI_LCLEAR, MI_SERIAL_IN MI_RESTORE, MI_CPU, MI_CLK, MI_PANEL, MI_RESET, MI_ABOUT, MI_COUNT, MI_LEDS MI_SERIAL_OUT };
+ static const char *const KVEL_N[SMK_KV_N] = {"DYNAMIC", "SOFT", "HARD", "FIXED 64", "FIXED 100", "FIXED 127"};
+ #else
+ enum { MI_COLOR, MI_PHEAD, MI_LARGE, MI_ANIM, MI_LEDS, MI_SCROFF, MI_HINTS, MI_HOLD, MI_ACCEL, MI_BPMLOCK, MI_SCLLED,
+        MI_PREVIEW, MI_RETURN, MI_KEEPS, MI_LOWCUT, MI_USB, MI_CLICK, MI_CLKLVL, MI_COUNTIN, MI_TUNE, MI_CLOCK, MI_CLKOUT, MI_ROUTE,
+-       MI_AUTOCH, MI_TCH1, MI_TCH2, MI_TCH3, MI_TCH4, MI_TCH5, MI_TCH6, MI_NOTES, MI_CCOUT, MI_THRU, MI_REMOTE, MI_LEARN,
++       MI_AUTOCH, MI_TCH1, MI_TCH2, MI_TCH3, MI_TCH4, MI_TCH5, MI_TCH6, MI_TCH7, MI_TCH8, MI_NOTES, MI_CCOUT, MI_THRU, MI_REMOTE, MI_LEARN,
+        MI_LCLEAR, MI_SERIAL_IN MI_RESTORE, MI_CPU, MI_CLK, MI_PANEL, MI_RESET, MI_ABOUT, MI_COUNT MI_SERIAL_OUT };
+ #endif   /* ((Skiff U4, A3) HINTS; RESET SETTINGS, a row with no value: its dialog) */   /* ((Skiff U3, R8, R2) CLOCK, MIDI IN, TUNE: the unit's, GLOBAL's and SYSTEM's before; CPU: read) */   /* (1.1: the metronome's rows in
+                                                                                              * AUDIO; 1.2: RESTORE LAST in SYSTEM, SCALE LEDS
+@@ -47,7 +47,7 @@
+ #endif
+                                               "SPEAKER EQ", "USB LEVEL", "CLICK", "CLICK LEVEL", "COUNT-IN", "TUNE",
+                                               "CLOCK", "CLOCK OUT", "MIDI IN", "AUTO CHANNEL",
+-                                              "T1 CHANNEL", "T2 CHANNEL", "T3 CHANNEL", "T4 CHANNEL", "T5 CHANNEL", "T6 CHANNEL",
++                                              "T1 CHANNEL", "T2 CHANNEL", "T3 CHANNEL", "T4 CHANNEL", "T5 CHANNEL", "T6 CHANNEL", "T7 CHANNEL", "T8 CHANNEL",
+                                               "NOTES OUT", "CC OUT", "THRU", "REMOTE", "MIDI LEARN", "LEARN CLEAR",
+                                               MI_SERIAL_NAME "RESTORE LAST", "CPU", "CPU CLOCK", "CALIBRATION", "RESET SETTINGS",
+                                               "ABOUT"};
+@@ -82,7 +82,7 @@
+     MTAB_MIDI, MTAB_MIDI, MTAB_MIDI, MTAB_MIDI,                             /* (Skiff U3) CLOCK, ((2.2) CLOCK OUT), MIDI
+                                                                              * IN ((1.3) from CONTROL), ((2.2) AUTO
+                                                                              * CHANNEL) */
+-    MTAB_MIDI, MTAB_MIDI, MTAB_MIDI, MTAB_MIDI, MTAB_MIDI, MTAB_MIDI,       /* (1.3) T1..T6 CHANNEL */
++    MTAB_MIDI, MTAB_MIDI, MTAB_MIDI, MTAB_MIDI, MTAB_MIDI, MTAB_MIDI, MTAB_MIDI, MTAB_MIDI, /* T1..T8 CHANNEL */
+     MTAB_MIDI, MTAB_MIDI, MTAB_MIDI, MTAB_MIDI,                             /* (2.2) NOTES OUT, CC OUT, THRU, REMOTE */
+     MTAB_MIDI, MTAB_MIDI,                                                   /* (1.3) MIDI LEARN, LEARN CLEAR */
+     MI_SERIAL_TAB MTAB_SYSTEM, MTAB_SYSTEM, MTAB_SYSTEM,                    /* USB SERIAL, RESTORE LAST, (Skiff U3) CPU,
+@@ -107,7 +107,7 @@
+ /* a row OCT+ acts on, with no value to step: CALIBRATION, RESET SETTINGS, ABOUT; (1.3) MIDI LEARN (on, the MENU closed;
+  * midi_learn.c), LEARN CLEAR */
+ static int menu_act(uint32_t row) { return row >= MI_VALUES || row == MI_LEARN || row == MI_LCLEAR; }
+-#define MI_TCH(row) ((row) >= MI_TCH1 && (row) <= MI_TCH6)   /* (1.3) T1..T6 CHANNEL: 0..15, seq.c trk_midi_ch */
++#define MI_TCH(row) ((row) >= MI_TCH1 && (row) <= MI_TCH8)   /* (1.3) T1..T6 CHANNEL: 0..15, seq.c trk_midi_ch */
+ /* the two-valued rows: a bit of ui_prefs (PREF_REC: of ui_rec_prefs, ui.c PREF_SCALE_LEDS) and its names (bit clear =
+  * the default, bit set). A step up (a knob right,
+  * OCT+) = ON on the ON / OFF rows (the switch's knob to the right; ANIM, USB SERIAL: their bit clears), else the
+@@ -199,7 +199,7 @@
+     case MI_CLICK: case MI_CLKLVL: case MI_COUNTIN: return rp_get(row - MI_CLICK);
+     case MI_CLOCK: return (uint32_t)song.g[G_CLOCK] % NELEM(N_CLOCK);
+     case MI_ROUTE: return song.g[G_ROUTE] != 0;
+-    case MI_TCH1: case MI_TCH2: case MI_TCH3: case MI_TCH4: case MI_TCH5: case MI_TCH6:   /* ((2.2) OFF, CH 1..16, then */
++    case MI_TCH1: case MI_TCH2: case MI_TCH3: case MI_TCH4: case MI_TCH5: case MI_TCH6: case MI_TCH7: case MI_TCH8:   /* ((2.2) OFF, CH 1..16, then */
+         return trk_moff(row - MI_TCH1) ? 0u : 1u + trk_midi_ch(row - MI_TCH1) + 16u * trk_ext(row - MI_TCH1);   /* EXT */
+     case MI_NOTES: return 2u - notes_out();            /* ((2.2) OFF KEYS ALL: stored ALL 0, KEYS 1, OFF 2) */
+     case MI_AUTOCH: return mset_ch(AUTO_BYTE & 31u);
+@@ -239,11 +239,13 @@
+     case MI_LEDS: return LEDS_NAME[LEDS_MENU[v % LEDS_COUNT]];
+     case MI_CLOCK: return N_CLOCK[v % NELEM(N_CLOCK)];
+     case MI_ROUTE:                                     /* ((1.3) CH1-6 with a track set elsewhere: TRACK) */
+-        if (!(v & 1u) && ((ui_mch(0) | ui_mch(1) | ui_mch(2) | ui_mch(3) | ui_mch(4) | ui_mch(5)) & 15u))
+-            return "TRACK";
++        if (!(v & 1u))
++            for (uint32_t k = 0; k < NTRK; k++)
++                if (*mch_setting(k) & 15u)
++                    return "TRACK";
+         return N_ROUTE[v & 1u];
+     case MI_NOTES: return v == 0u ? "OFF" : v == 1u ? "KEYS" : "ALL";
+-    case MI_LCLEAR: case MI_TCH1: case MI_TCH2: case MI_TCH3: case MI_TCH4: case MI_TCH5: case MI_TCH6:
++    case MI_LCLEAR: case MI_TCH1: case MI_TCH2: case MI_TCH3: case MI_TCH4: case MI_TCH5: case MI_TCH6: case MI_TCH7: case MI_TCH8:
+     case MI_AUTOCH: case MI_REMOTE: {
+         static char c[12] __attribute__((section(".pool")));  /* ((1.3) "CH 10"; LEARN CLEAR: "3 CC", "NONE"; (2.2) "OFF",
+                                                                * "CH 10 EXT") */
+@@ -329,9 +331,9 @@
+     case MI_CLICK: case MI_CLKLVL: case MI_COUNTIN: rp_put(row - MI_CLICK, v); break;   /* (at once: click.c, seq.c) */
+     case MI_CLOCK: song.g[G_CLOCK] = (int16_t)v; break;   /* ((Skiff U3) the unit's: ui.c unit_g_poll keeps them) */
+     case MI_ROUTE: song.g[G_ROUTE] = (int16_t)v; break;
+-    case MI_TCH1: case MI_TCH2: case MI_TCH3: case MI_TCH4: case MI_TCH5: case MI_TCH6:   /* ((1.3) the ISR reads it */
+-        ui_mch(row - MI_TCH1) = (uint8_t)(v ? ((v - 1u - (row - MI_TCH1)) & 15u) | (v > 16u ? MCH_EXT : 0u) :   /* at */
+-                                          (ui_mch(row - MI_TCH1) & 15u) | MCH_OFF);   /* its next block; (2.2) OFF keeps */
++    case MI_TCH1: case MI_TCH2: case MI_TCH3: case MI_TCH4: case MI_TCH5: case MI_TCH6: case MI_TCH7: case MI_TCH8:   /* ((1.3) the ISR reads it */
++        (*mch_setting(row - MI_TCH1)) = (uint8_t)(v ? ((v - 1u - (row - MI_TCH1)) & 15u) | (v > 16u ? MCH_EXT : 0u) :   /* at */
++                                          ((*mch_setting(row - MI_TCH1)) & 15u) | MCH_OFF);   /* its next block; (2.2) OFF keeps */
+         break;                                                                        /* the channel, EXT a flag) */
+     case MI_NOTES: MIDI_BYTE = (uint8_t)((MIDI_BYTE & ~3u) | (2u - v % 3u)); break;   /* ((2.2) OFF KEYS ALL: 2 1 0) */
+     case MI_AUTOCH: AUTO_BYTE = (uint8_t)((AUTO_BYTE & ~31u) | v); break;
+--- a/firmware/src/motion.c
++++ b/firmware/src/motion.c
+@@ -50,7 +50,7 @@
+     if (m->count > MOTION_MAX || (m->on & ~((1u << NTRK) - 1u))) return 0;
+     for (i = 0; i < m->count; i++) {
+         const motion_event_t *e = &m->event[i];
+-        if (!motion_param(MOTION_ID(e)) || e->value < -64 || e->value > 127) return 0;
++        if (e->place >= MOTION_PLACE_NONE || !motion_param(MOTION_ID(e)) || e->value < -64) return 0;
+         for (j = 0; j < i; j++)
+             if (m->event[j].place == e->place && MOTION_ID(&m->event[j]) == MOTION_ID(e)) return 0;
+     }
+@@ -60,30 +60,30 @@
+ static uint32_t motion_count(const track_t *t)
+ {
+     uint32_t i, n = 0, k = trk_index(t);
+-    for (i = 0; i < motion.count; i++) n += (motion.event[i].place >> 6) == k;
++    for (i = 0; i < motion.count; i++) n += (MOTION_TRACK(motion.event[i].place)) == k;
+     return n;
+ }
+ /* track t's parameter locks (of motion_count) */
+ static uint32_t motion_lock_count(const track_t *t)
+ {
+     uint32_t i, n = 0, k = trk_index(t);
+-    for (i = 0; i < motion.count; i++) n += (motion.event[i].place >> 6) == k && motion.event[i].lock;
++    for (i = 0; i < motion.count; i++) n += (MOTION_TRACK(motion.event[i].place)) == k && motion.event[i].lock;
+     return n;
+ }
+ /* the steps of track k that hold a lock, bit s = step s (the roll and the grid mark them) */
+-static uint64_t motion_lock_steps(uint32_t k)
++static step_mask_t motion_lock_steps(uint32_t k)
+ {
+     uint32_t i;
+-    uint64_t m = 0;
+-    for (i = 0; i < motion.count; i++)
+-        if ((motion.event[i].place >> 6) == k && motion.event[i].lock)
+-            m |= (uint64_t)1 << (motion.event[i].place & 63u);
++    step_mask_t m = STEP_MASK_EMPTY;
++    for (i = 0; i < motion.count; i++)
++        if ((MOTION_TRACK(motion.event[i].place)) == k && motion.event[i].lock)
++            step_mask_set(&m, MOTION_STEP(motion.event[i].place));
+     return m;
+ }
+ /* the lock of track t on step / id: 1 and its value in *v, 0 = none */
+ static int motion_lock_get(const track_t *t, uint32_t step, uint32_t id, int16_t *v)
+ {
+-    uint32_t i, place = trk_index(t) << 6 | step;
++    uint32_t i, place = MOTION_PLACE(trk_index(t), step);
+     for (i = 0; i < motion.count; i++)
+         if (motion.event[i].place == place && MOTION_ID(&motion.event[i]) == id && motion.event[i].lock) {
+             *v = motion.event[i].value;
+@@ -100,7 +100,7 @@
+     if (k >= NTRK || !((motion.on >> k) & 1u)) return 0;
+     for (i = 0; i < motion.count; i++) {
+         const motion_event_t *e = &motion.event[i];
+-        if ((e->place >> 6) != k || MOTION_ID(e) >= P_COUNT) continue;
++        if ((MOTION_TRACK(e->place)) != k || MOTION_ID(e) >= P_COUNT) continue;
+         m[MOTION_ID(e) / 32u] |= 1u << (MOTION_ID(e) % 32u);
+         any = 1;
+     }
+@@ -159,7 +159,7 @@
+     motion_lost &= (uint8_t)~(1u << k);            /* (cleared on purpose: nothing of it to keep) */
+     motion_restore(t);
+     for (i = 0; i < motion.count; i++)
+-        if ((motion.event[i].place >> 6) != k) motion.event[n++] = motion.event[i];
++        if ((MOTION_TRACK(motion.event[i].place)) != k) motion.event[n++] = motion.event[i];
+     memset(motion.event + n, 0, (MOTION_MAX - n) * sizeof motion.event[0]);
+     motion.count = (uint8_t)n;
+     motion.on &= (uint8_t)~(1u << k);
+@@ -181,9 +181,9 @@
+     value = (int16_t)param_fit(d, value);                    /* (a retired KIT: the kit it plays) */
+     f = motion_guard();
+     for (i = 0; i < motion.count; i++)
+-        if (motion.event[i].place == (k << 6 | step) && MOTION_ID(&motion.event[i]) == id) break;
++        if (motion.event[i].place == (MOTION_PLACE(k, step)) && MOTION_ID(&motion.event[i]) == id) break;
+     if (i == MOTION_MAX) { motion_full = 1; motion_unguard(f); return 2; }
+-    motion.event[i].place = (uint16_t)(k << 6 | step);
++    motion.event[i].place = (uint16_t)(MOTION_PLACE(k, step));
+     motion.event[i].id = (uint8_t)id;
+     motion.event[i].lock = kind != 0u;
+     motion.event[i].value = (int8_t)value;                   /* (-64..127: checked above) */
+@@ -200,7 +200,7 @@
+ }
+ static void motion_delete_event(track_t *t, uint32_t step, uint32_t id)   /* (either kind) */
+ {
+-    uint32_t f = motion_guard(), place = trk_index(t) << 6 | step, i, n = 0;
++    uint32_t f = motion_guard(), place = MOTION_PLACE(trk_index(t), step), i, n = 0;
+     motion_restore(t);
+     for (i = 0; i < motion.count; i++)
+         if (motion.event[i].place != place || MOTION_ID(&motion.event[i]) != id) motion.event[n++] = motion.event[i];
+@@ -215,7 +215,7 @@
+     uint32_t f = motion_guard(), k = trk_index(t), i, n = 0, gone;
+     for (i = 0; i < motion.count; i++) {
+         const motion_event_t *e = &motion.event[i];
+-        if ((e->place >> 6) == k && e->lock && (step >= NSTEP || (e->place & 63u) == step)) continue;
++        if ((MOTION_TRACK(e->place)) == k && e->lock && (step >= NSTEP || (MOTION_STEP(e->place)) == step)) continue;
+         motion.event[n++] = *e;
+     }
+     gone = motion.count - n;
+@@ -263,8 +263,8 @@
+         v = motion_base[k][id];
+         for (i = 0; i < m->count; i++) {
+             const motion_event_t *e = &m->event[i];
+-            int32_t s = (int32_t)(e->place & 63u);
+-            if ((e->place >> 6) != k || MOTION_ID(e) != id || e->lock || s > (int32_t)step || s <= best)
++            int32_t s = (int32_t)(MOTION_STEP(e->place));
++            if ((MOTION_TRACK(e->place)) != k || MOTION_ID(e) != id || e->lock || s > (int32_t)step || s <= best)
+                 continue;                               /* (automation only, no lock) */
+             best = s;
+             v = (int16_t)param_fit(param_desc_of(eng_idx(t->eng_req), id), e->value);
+@@ -289,7 +289,7 @@
+     for (i = 0; i < m->count; i++) {
+         const motion_event_t *e = &m->event[i];
+         uint32_t id = MOTION_ID(e);
+-        if (e->place != (k << 6 | step) || (e->lock && !play)) continue;
++        if (e->place != (MOTION_PLACE(k, step)) || (e->lock && !play)) continue;
+         const param_desc_t *d = param_desc_of(eng_idx(t->eng_req), id);
+         t->p[id] = (int16_t)param_fit(d, e->value);
+         motion_active[k][id / 32u] |= 1u << (id % 32u);
+@@ -303,14 +303,14 @@
+     memset(out, 0, sizeof *out);
+     out->on = motion.on & (uint8_t)(1u << k);
+     for (i = 0; i < motion.count; i++)
+-        if ((motion.event[i].place >> 6) == k) out->event[out->count++] = motion.event[i];
++        if ((MOTION_TRACK(motion.event[i].place)) == k) out->event[out->count++] = motion.event[i];
+     motion_unguard(f);
+ }
+ static int motion_replace_track(track_t *t, const motion_store_t *in)
+ {
+     uint32_t k = trk_index(t), n = motion.count - motion_count(t), f;
+     if (!motion_valid(in) || n + in->count > MOTION_MAX) return 2;
+-    for (uint32_t i = 0; i < in->count; i++) if ((in->event[i].place >> 6) != k) return 1;
++    for (uint32_t i = 0; i < in->count; i++) if (MOTION_TRACK(in->event[i].place) != k) return 1;
+     f = motion_guard();
+     motion_clear(t);
+     memcpy(motion.event + motion.count, in->event, in->count * sizeof in->event[0]);
+@@ -324,7 +324,7 @@
+ /* the record of track t on step / id (either kind): its index, -1 none */
+ static int32_t motion_find(const track_t *t, uint32_t step, uint32_t id)
+ {
+-    uint32_t i, place = trk_index(t) << 6 | step;
++    uint32_t i, place = MOTION_PLACE(trk_index(t), step);
+     for (i = 0; i < motion.count; i++)
+         if (motion.event[i].place == place && MOTION_ID(&motion.event[i]) == id)
+             return (int32_t)i;
+@@ -339,12 +339,12 @@
+     uint32_t i, j, n = 0;
+     for (i = 0; i < motion.count; i++) {
+         const motion_event_t *e = &motion.event[i];
+-        uint32_t key = e->place & 63u;
+-        if ((e->place >> 6) != k)
++        uint32_t key = MOTION_STEP(e->place);
++        if ((MOTION_TRACK(e->place)) != k)
+             continue;
+         for (j = n; j > 0u; j--) {                       /* (insertion, stable: at most MOTION_MAX) */
+             const motion_event_t *o = &motion.event[idx[j - 1u]];
+-            if ((uint32_t)(o->place & 63u) <= key)
++            if ((uint32_t)(MOTION_STEP(o->place)) <= key)
+                 break;
+             idx[j] = idx[j - 1u];
+         }
+@@ -360,7 +360,7 @@
+     const param_desc_t *d;
+     int32_t at;
+     uint32_t f;
+-    if (i >= motion.count || (motion.event[i].place >> 6) != trk_index(t) || step >= NSTEP || !motion_param(id))
++    if (i >= motion.count || (MOTION_TRACK(motion.event[i].place)) != trk_index(t) || step >= NSTEP || !motion_param(id))
+         return 1;
+     at = motion_find(t, step, id);
+     if (at >= 0 && (uint32_t)at != i)
+@@ -369,9 +369,9 @@
+     if (v < d->min || v > d->max || v < -64 || v > 127)
+         return 1;
+     f = motion_guard();
+-    if (motion.event[i].place != (trk_index(t) << 6 | step) || MOTION_ID(&motion.event[i]) != id)
++    if (motion.event[i].place != (MOTION_PLACE(trk_index(t), step)) || MOTION_ID(&motion.event[i]) != id)
+         motion_restore(t);                              /* (a value alone: what sounds stays) */
+-    motion.event[i].place = (uint16_t)(trk_index(t) << 6 | step);
++    motion.event[i].place = (uint16_t)(MOTION_PLACE(trk_index(t), step));
+     motion.event[i].id = (uint8_t)id;                  /* (its kind kept) */
+     motion.event[i].value = (int8_t)param_fit(d, v);
+     motion_unguard(f);
+@@ -393,7 +393,7 @@
+     f = motion_guard();
+     for (i = 0; i < motion.count; i++) {
+         const motion_event_t *e = &motion.event[i];
+-        if ((e->place >> 6) == k && motion_engine_id(MOTION_ID(e)))
++        if ((MOTION_TRACK(e->place)) == k && motion_engine_id(MOTION_ID(e)))
+             continue;
+         motion.event[n++] = *e;
+     }
+--- a/firmware/src/params.c
++++ b/firmware/src/params.c
+@@ -25,7 +25,7 @@
+ static const char *const N_PRIO[] = {"LAST", "LOW", "HIGH"};
+ static const char *const N_ALLOC[] = {"ROT", "REUSE"};
+ static const char *const N_DIR[] = {"FWD", "RVRS", "PING", "RAND"};   /* ((Skiff U4, L2) RVRS: REV is reverb) */   /* (Skiff) DIR_* (seq.c seq_next) */
+-static const char *const N_DKSRC[] = {"OFF", "T1", "T2", "T3", "T4", "T5", "T6"};   /* (Skiff) P_DKSRC: the track ducked under */
++static const char *const N_DKSRC[] = {"OFF", "T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8"};
+ _Static_assert(sizeof N_DKSRC / sizeof N_DKSRC[0] == NTRK + 1u, "DUCK's BY: OFF and every track");
+ /* (2.1) chord follow (follow.c): P_FOLLOW names the track as DUCK's BY does; P_FMODE FM_*, P_FNOTE FN_* (append-only) */
+ static const char *const N_FMODE[] = {"KEY", "SCALE", "FIT"};
+--- a/firmware/src/project.c
++++ b/firmware/src/project.c
+@@ -191,7 +191,7 @@
+ #define PROJ_STORE3 2048u
+ typedef struct { uint32_t magic, size, nt, sc, dx; } proj_fmt_t;   /* (dx: 1 = it holds the DRUM-X kit) */
+ static const proj_fmt_t PROJ_SKF2 = {PROJ_MAGIC2, PROJ_STORE2, PROJ_NT, PROJ_SC2, 0u};
+-static const proj_fmt_t PROJ_SKF3 = {PROJ_MAGIC3, PROJ_STORE3, 6u, PROJ_SCENES, 1u};
++static const proj_fmt_t PROJ_SKF3 = {PROJ_MAGIC3, PROJ_STORE3, 6u, PROJ_SCENES_LEGACY, 1u};
+ /* (Skiff 2.0, Tier B: design/TIER_B.md 5) "SKF4": 2560 bytes, the parameters by stored id (core.h sid_put): one added
+  * or moved never shifts the others. 8 the layout (PROJ_LAYOUT4; another is not one this firmware reads), 9 flags (0);
+  * from 10 (PROJ_ENT4) the lists, 4 bytes an entry (pattern id + 1 or PAT_REST, the REPS byte, the entry's sound: #30's,
+@@ -204,10 +204,12 @@
+ #define PROJ_STORE4 2560u
+ #define PROJ_LAYOUT4 1u
+ #define PROJ_ENT4 10u
+-static const proj_fmt_t PROJ_SKF4 = {PROJ_MAGIC4, PROJ_STORE4, 6u, PROJ_SCENES, 1u};
++static const proj_fmt_t PROJ_SKF4 = {PROJ_MAGIC4, PROJ_STORE4, 6u, PROJ_SCENES_LEGACY, 1u};
++#define PROJ_STORE5 3584u
++static const proj_fmt_t PROJ_SKF5 = {0x534B4635u, PROJ_STORE5, NTRK, PROJ_SCENES, 1u};
+ _Static_assert(PROJ_ENT4 + NTRK * (NENT * 4u + 1u) + PROJ_SCENES + 2u + 1u + DV_NLANE * 11u + NTRK * FM6_PACKED +
+-               1u + 2u * GSID_COUNT + NTRK * (4u + SID_COUNT) + PROJ_NAME_LEN + 4u <= PROJ_STORE4, "SKF4 holds it all");
+-#define PROJ_SKF (&PROJ_SKF4)                  /* the format a save writes */
++               1u + 2u * GSID_COUNT + NTRK * (6u + SID_COUNT) + PROJ_NAME_LEN + 4u <= PROJ_STORE5, "expanded project capacity");
++#define PROJ_SKF (&PROJ_SKF5)                  /* the format a save writes */
+ #define PROJ_NAME_AT(f) ((f)->size - 4u - PROJ_NAME_LEN)
+ #define PROJ_FM6_AT(f) (PROJ_NAME_AT(f) - (f)->nt * FM6_PACKED)
+ #define PROJ_DX_MARK 0x58u                    /* ('X') the kit follows */
+@@ -221,12 +223,12 @@
+ #define PROJ_PX_AT(f) (PROJ_DX_AT(f) - 2u - (f)->nt * PROJ_PX_MAX)   /* (a dx format's) */
+ #define PROJ_HEAD_END(f) ((f)->dx ? PROJ_PX_AT(f) : PROJ_FM6_AT(f))      /* where the tracks, lists and scenes end */
+ _Static_assert(sizeof(dx_lane_t) == 11u, "a DRUM-X lane is 11 bytes in SKF3");
+-_Static_assert(NTRK == 6u, "SKF3: six tracks");
++
+ _Static_assert(P_COUNT >= PROJ_NP && PROJ_NX <= PROJ_PX_MAX, "the parameters past PROJ_NP fit the PX block");
+-_Static_assert(68u + 6u * (PROJ_NP + 2u + NENT * 2u + 1u) + PROJ_SCENES <=
++_Static_assert(68u + 6u * (PROJ_NP + 2u + NENT * 2u + 1u) + PROJ_SCENES_LEGACY <=
+                PROJ_STORE3 - 4u - PROJ_NAME_LEN - 6u * FM6_PACKED - 1u - DV_NLANE * 11u - 2u - 6u * PROJ_PX_MAX,
+                "SKF3's tracks, lists and scenes end before its PX block");
+-typedef union { uint32_t align; uint8_t raw[FELUCCA_LEGACY ? PROJ_STORE_SIZE : PROJ_STORE4]; } project_store_t;   /* ((2.0)
++typedef union { uint32_t align; uint8_t raw[FELUCCA_LEGACY ? PROJ_STORE_SIZE : PROJ_STORE5]; } project_store_t;   /* ((2.0)
+                                                 * SKF4's, the largest record it reads; the converter's SKF1) */
+ _Static_assert(PROJ_NG_V2 == 27u && G_COUNT >= PROJ_NG_V2, "the fixed layouts (FUN1 .. FUN7, SKF1 .. SKF3) hold the "
+                "first 27 globals at their places; (2.5) one added since only SKF4 holds, by GSID");
+@@ -629,7 +631,7 @@
+     if (!proj_import_any(q, b, n) || !proj_engines_ok(q))
+         return 0;
+ #if FELUCCA_LEGACY
+-    if (proj_fmt_of(b, n) != &PROJ_SKF3 && proj_fmt_of(b, n) != &PROJ_SKF4 &&   /* (Skiff phase 9) the CHORUS MODE */
++    if (proj_fmt_of(b, n) != &PROJ_SKF3 && proj_fmt_of(b, n) != &PROJ_SKF4 && proj_fmt_of(b, n) != &PROJ_SKF5 &&   /* (Skiff phase 9) the CHORUS MODE */
+         (q->g[G_CMODE] || q->g[G_CFDBK])) {
+         q->g[G_CMODE] = q->g[G_CFDBK] = 0;          /* and FEEDBACK: in an older format the old GM drum part's level */
+         q->sum = proj_sum(q);                       /* and reverb send, read above: as at power-on) */
+@@ -653,7 +655,7 @@
+ static const proj_fmt_t *proj_fmt_of(const void *b, int n)
+ {
+     const uint32_t *w = (const uint32_t *)b;
+-    const proj_fmt_t *f = n < 8 ? 0 : w[0] == PROJ_MAGIC4 ? &PROJ_SKF4 : w[0] == PROJ_MAGIC3 ? &PROJ_SKF3 :
++    const proj_fmt_t *f = n < 8 ? 0 : w[0] == PROJ_SKF5.magic ? &PROJ_SKF5 : w[0] == PROJ_MAGIC4 ? &PROJ_SKF4 : w[0] == PROJ_MAGIC3 ? &PROJ_SKF3 :
+                           FELUCCA_LEGACY && w[0] == PROJ_MAGIC2 ? &PROJ_SKF2 : 0;
+     return f && n >= (int)f->size && w[1] == f->size ? f : 0;
+ }
+@@ -1000,62 +1002,71 @@
+ }
+ #endif
+ /* (2.0) q -> an SKF4 record (see the top; no steps or motion: the patterns hold them); 0 for a value it can't hold */
+-static int proj_pack4(project_store_t *out, const project_t *q)
++static int proj_pack4(project_store_t *out, const project_t *q, const proj_fmt_t *f)
+ {
+     uint8_t *b = out->raw;
+     uint32_t pos = PROJ_ENT4, t, e, n, sum;
+-    for (t = 0; t < NTRK; t++)
++    for (t = 0; t < f->nt; t++)
+         for (e = 0; e < FM6_PACKED; e++)
+             if (q->fm6[t][e] > 127u) return 0;
+     if (!proj_ent_ok(q)) return 0;
+-    memset(out, 0, sizeof *out); memcpy(b, &PROJ_SKF4.magic, 4); memcpy(b + 4, &PROJ_SKF4.size, 4);
++    memset(out, 0, sizeof *out); memcpy(b, &f->magic, 4); memcpy(b + 4, &f->size, 4);
+     b[8] = PROJ_LAYOUT4;
+-    for (t = 0; t < NTRK; t++)
++    for (t = 0; t < f->nt; t++)
+         for (e = 0; e < NENT; e++, pos += 4u) {            /* (+2, +3: the entry's sound, #30) */
+             b[pos] = q->ent[t][e][0];
+             b[pos + 1u] = q->ent[t][e][1];
+             b[pos + 2u] = q->snd[t][e][0];
+             b[pos + 3u] = q->snd[t][e][1];
+         }
+-    memcpy(b + pos, q->cur, NTRK); pos += NTRK;
+-    memcpy(b + pos, q->scene, PROJ_SCENES); pos += PROJ_SCENES;
++    memcpy(b + pos, q->cur, f->nt); pos += f->nt;
++    memcpy(b + pos, q->scene, f->sc); pos += f->sc;
+     b[pos++] = q->sel; b[pos++] = q->song;
+     if (q->dx_on && dx_kit_ok(q->dx)) {
+         b[pos] = PROJ_DX_MARK;
+         memcpy(b + pos + 1u, q->dx, sizeof q->dx);
+     }
+     pos += 1u + sizeof q->dx;
+-    memcpy(b + pos, q->fm6, sizeof q->fm6); pos += sizeof q->fm6;
++    memcpy(b + pos, q->fm6, f->nt * FM6_PACKED); pos += f->nt * FM6_PACKED;
+     pos += gsid_put(b + pos, q->g);
+-    for (t = 0; t < NTRK; t++) {
++    for (t = 0; t < f->nt; t++) {
+         b[pos] = q->t[t].engine; b[pos + 1u] = q->t[t].preset; b[pos + 2u] = q->t[t].user; pos += 3u;   /* (#20) */
+-        if (!(n = sid_put(b + pos, q->t[t].p))) return 0;
++        if (f == &PROJ_SKF5) {
++            int16_t params[P_COUNT];
++            unsigned length = q->t[t].p[P_SLEN];
++            if (length < 1u || length > NSTEP) return 0;
++            b[pos++] = (uint8_t)length;
++            b[pos++] = (uint8_t)(length >> 8);
++            memcpy(params, q->t[t].p, sizeof params);
++            params[P_SLEN] = TP[P_SLEN].def;
++            if (!(n = sid_put(b + pos, params))) return 0;
++        } else if (!(n = sid_put(b + pos, q->t[t].p))) return 0;
+         pos += n;
+     }
+     {
+         char nm[PROJ_NAME_LEN + 1u];
+-        memcpy(b + PROJ_NAME_AT(&PROJ_SKF4), nm, proj_name_get(nm, (const uint8_t *)q->name));
+-    }
+-    sum = proj_hash(b, PROJ_STORE4 - 4u); memcpy(b + PROJ_STORE4 - 4u, &sum, 4);
++        memcpy(b + PROJ_NAME_AT(f), nm, proj_name_get(nm, (const uint8_t *)q->name));
++    }
++    sum = proj_hash(b, f->size - 4u); memcpy(b + f->size - 4u, &sum, 4);
+     return 1;
+ }
+ /* (2.0) an SKF4 record (its magic and size checked: proj_fmt_of) -> q; 0 if it is not one this firmware reads */
+-static int proj_unpack4(project_t *q, const uint8_t *b)
+-{
+-    uint32_t pos = PROJ_ENT4, end = PROJ_NAME_AT(&PROJ_SKF4), t, e, n, sum;
+-    memcpy(&sum, b + PROJ_STORE4 - 4u, 4);
+-    if (b[8] != PROJ_LAYOUT4 || sum != proj_hash(b, PROJ_STORE4 - 4u)) return 0;
++static int proj_unpack4(project_t *q, const uint8_t *b, const proj_fmt_t *f)
++{
++    uint32_t pos = PROJ_ENT4, end = PROJ_NAME_AT(f), t, e, n, sum;
++    memcpy(&sum, b + f->size - 4u, 4);
++    if (b[8] != PROJ_LAYOUT4 || sum != proj_hash(b, f->size - 4u)) return 0;
+     memset(q, 0, sizeof *q); q->magic = PROJ_MAGIC; q->size = sizeof *q;
+     q->parts = PROJ_PARTS; q->phys = PROJ_PHYS;
+-    for (t = 0; t < NTRK; t++)
++    for (t = 0; t < f->nt; t++)
+         for (e = 0; e < NENT; e++, pos += 4u) {
+             q->ent[t][e][0] = b[pos];
+             q->ent[t][e][1] = b[pos + 1u];
+             q->snd[t][e][0] = b[pos + 2u];             /* ((#30) as it is: one no longer there plays none, esnd_make) */
+             q->snd[t][e][1] = b[pos + 3u];
+         }
+-    memcpy(q->cur, b + pos, NTRK); pos += NTRK;
+-    memcpy(q->scene, b + pos, PROJ_SCENES); pos += PROJ_SCENES;
++    memcpy(q->cur, b + pos, f->nt); pos += f->nt;
++    memcpy(q->scene, b + pos, f->sc); pos += f->sc;
+     q->sel = b[pos++]; q->song = b[pos++];
+     if (!proj_ent_ok(q)) return 0;
+     if (b[pos] == PROJ_DX_MARK && dx_kit_ok((const dx_lane_t *)(b + pos + 1u))) {
+@@ -1063,7 +1074,7 @@
+         q->dx_on = 1;
+     }
+     pos += 1u + sizeof q->dx;
+-    for (t = 0; t < NTRK; t++)
++    for (t = 0; t < f->nt; t++)
+         for (e = 0; e < FM6_PACKED; e++)
+             q->fm6[t][e] = b[pos++] & 0x7Fu;
+     for (e = 0; e < G_COUNT; e++)
+@@ -1072,16 +1083,23 @@
+     if (b[pos] <= G_DMODE)                               /* ((2.5) a record before it (2.2's: 27): MONO, as it played */
+         q->g[G_DMODE] = DM_MONO;
+     pos += n;
+-    for (t = 0; t < NTRK; t++) {
+-        if (end - pos < 3u) return 0;
++    for (t = 0; t < f->nt; t++) {
++        if (pos > end || end - pos < (f == &PROJ_SKF5 ? 5u : 3u)) return 0;
+         q->t[t].engine = b[pos]; q->t[t].preset = b[pos + 1u];
+         q->t[t].user = b[pos + 2u] <= UP_SLOTS ? b[pos + 2u] : 0u;   /* ((#20) past the slots: none, the project still loads) */
+         pos += 3u;
+         if (q->t[t].engine >= NENGINES) return 0;
+         for (e = 0; e < P_COUNT; e++)
+             q->t[t].p[e] = param_desc_of(q->t[t].engine, e)->def;
++        unsigned length = 0;
++        if (f == &PROJ_SKF5) {
++            length = b[pos] | (uint32_t)b[pos + 1u] << 8;
++            pos += 2u;
++            if (length < 1u || length > NSTEP) return 0;
++        }
+         if (!(n = sid_get(q->t[t].p, b + pos, end - pos))) return 0;
+         pos += n;
++        if (length) q->t[t].p[P_SLEN] = (int16_t)length;
+ #if FELUCCA_LEGACY
+         for (e = 0; e < NSTEP; e++)
+             q->t[t].step[e].time = ST_REST;               /* (empty: the patterns hold the steps) */
+@@ -1094,6 +1112,7 @@
+         char nm[PROJ_NAME_LEN + 1u];
+         memcpy(q->name, nm, proj_name_get(nm, b + end));
+     }
++    proj_power_on(q, f->nt);
+     q->sum = proj_sum(q);
+     return 1;
+ }
+@@ -1104,7 +1123,7 @@
+ {
+     uint8_t *b = out->raw;
+     uint32_t pos = 68u, t, i, sum;
+-    if (f == &PROJ_SKF4) return proj_pack4(out, q);
++    if (f == &PROJ_SKF4 || f == &PROJ_SKF5) return proj_pack4(out, q, f);
+     if (f->nt > NTRK || f->sc > PROJ_SCENES) return 0;
+     for (t = 0; t < f->nt; t++)
+         for (i = 0; i < FM6_PACKED; i++)
+@@ -1159,7 +1178,7 @@
+         const uint8_t *b = proj_slot[sl].raw;
+         const proj_fmt_t *f = proj_fmt_of(b, sizeof proj_slot[sl]);
+         np = b[66];
+-        if (f == &PROJ_SKF4)
++        if (f == &PROJ_SKF4 || f == &PROJ_SKF5)
+             off = PROJ_ENT4, w = 4u;
+         else if (!f || np < 8u || np > P_COUNT)
+             continue;
+@@ -1175,7 +1194,7 @@
+ static int proj_unpack2(project_t *q, const uint8_t *b, const proj_fmt_t *f)
+ {
+     uint32_t pos = 68u, t, i, magic, size, sum, np = b[66];
+-    if (f == &PROJ_SKF4) return proj_unpack4(q, b);
++    if (f == &PROJ_SKF4 || f == &PROJ_SKF5) return proj_unpack4(q, b, f);
+     memcpy(&magic, b, 4); memcpy(&size, b + 4, 4); memcpy(&sum, b + f->size - 4u, 4);
+     if (f->nt > NTRK || f->sc > PROJ_SCENES || magic != f->magic || size != f->size ||
+         sum != proj_hash(b, f->size - 4u) || np < 8u || np > P_COUNT ||
+--- a/firmware/src/seq.c
++++ b/firmware/src/seq.c
+@@ -75,13 +75,19 @@
+ static uint32_t trk_index(const track_t *t) { return (uint32_t)(t - trk); }
+ 
+ /* (Skiff 1.3, from Felucca 1.5.5's #202) MENU > MIDI > T1..T6 CHANNEL, the unit's: each track's MIDI channel, kept as
+- * its distance up from the track's own (ui.c mch_io: settings bytes; 0, every older setting: channel k + 1 for track k,
++ * its distance up from the track's own (0 is channel k + 1 for track k,
+  * CH1-6 as before). MIDI IN CH1-6 hears them (midi_slot), the keys play out on them; a build without the UI: CH1-6 */
+-static const uint8_t *const mch_io;
++#define MCH_STOCK_TRACKS 6u
++static const uint8_t *const mch_stock, *const mch_extra;
++static uint8_t mch_value(uint32_t k)
++{
++    const uint8_t *p = k < MCH_STOCK_TRACKS ? mch_stock : mch_extra;
++    return p ? p[k < MCH_STOCK_TRACKS ? k : k - MCH_STOCK_TRACKS] : 0;
++}
+ static uint32_t trk_midi_ch(uint32_t i)            /* MIDI channel 0..15 of track i (MIDI IN; keys -> MIDI out) */
+ {
+     i %= NTRK;
+-    return mch_io ? (i + mch_io[i]) & 15u : i;
++    return (i + mch_value(i)) & 15u;
+ }
+ 
+ /* (2.2) T1..T6 CHANNEL's flags ride in their bytes' high bits (bit 6 EXT, bit 7 OFF), above the channel: (i + b) & 15,
+@@ -89,14 +95,14 @@
+ #define MCH_EXT 0x40u
+ #define MCH_OFF 0x80u
+ static uint32_t notes_out(void) { uint32_t m = MSET(15, 17) & 3u; return m == 3u ? NO_ALL : m; }
+-static uint32_t trk_ext(uint32_t i) { return mch_io && (mch_io[i % NTRK] & (MCH_EXT | MCH_OFF)) == MCH_EXT; }
+-static uint32_t trk_moff(uint32_t i) { return mch_io && (mch_io[i % NTRK] & MCH_OFF); }
++static uint32_t trk_ext(uint32_t i) { return (mch_value(i % NTRK) & (MCH_EXT | MCH_OFF)) == MCH_EXT; }
++static uint32_t trk_moff(uint32_t i) { return (mch_value(i % NTRK) & MCH_OFF); }
+ 
+ /* (2.2) NOTES OUT: what went out, per track. on[i]: a bit per note sent whose note-off is owed, all on channel ch[i];
+  * owe[i]: those whose note-off the ring had no room for (lost: sent again next block). quiet: MIDI IN's notes are going
+  * in (never sent back: no loop through a computer). cfg: the settings events_block last saw. clk, started: CLOCK OUT */
+ static struct {
+-    uint32_t on[NTRK][4], owe[NTRK][4], cfg[2], clk;
++    uint32_t on[NTRK][4], owe[NTRK][4], cfg[2], control, clk;
+     uint8_t ch[NTRK], quiet, lost, started;
+ } mn __attribute__((section(".bss.mo")));
+ 
+@@ -678,7 +684,7 @@
+  * group of before 2.0, TIEs); rec_n: the steps each held note (rh_note's order) has gone on; rec_tm: those tied into
+  * the step entered last (a release before its middle takes it out again) */
+ static uint8_t rec_mix[NTRK] __attribute__((section(".pool")));
+-static uint8_t rec_n[NTRK][4] __attribute__((section(".pool")));
++static uint16_t rec_n[NTRK][4] __attribute__((section(".pool")));
+ static uint8_t rec_tm[NTRK] __attribute__((section(".pool")));
+ static int rec_poly(const track_t *t) { return trk_vmode(t) == V_POLY && t->p[P_DIR] == DIR_FWD && !drum_track(t); }
+ /* TIE step s (step i) as the notes it holds, tied: the notes of the step before them that can tie */
+@@ -768,7 +774,7 @@
+                                                                        * again ((Skiff) unless it has, early: NUDGE) */
+         if (t->rskip_idx != idx)
+             t->rskip_n = 0;
+-        t->rskip_idx = (uint8_t)idx;
++        t->rskip_idx = (uint16_t)idx;
+         if (t->rskip_n < (drum_track(t) ? NLANE : 4u))
+             t->rskip[t->rskip_n++] = (uint8_t)note;
+     }
+@@ -778,10 +784,10 @@
+         if (!rec_mix[ti])
+             for (rec_mix[ti] = 1, k = 0; k < t->rh_n; k++)
+                 rec_n[ti][k] = t->rh_ties;
+-        t->rh_start = (uint8_t)idx;
++        t->rh_start = (uint16_t)idx;
+     } else if (!t->rh_n || t->rh_start != idx) {    /* a new hold (one in another step ends) */
+         t->rh_n = rec_mix[ti] = rec_tm[ti] = 0;
+-        t->rh_start = (uint8_t)idx;
++        t->rh_start = (uint16_t)idx;
+         t->rh_ties = 0;
+     }
+     for (k = 0; k < t->rh_n && t->rh_note[k] != note; k++)
+@@ -799,7 +805,7 @@
+ {
+     step_t *s = &t->step[idx];
+     uint32_t ti = trk_index(t), i, k = 0, x, tm = 0;
+-    t->rh_last = (uint8_t)idx;
++    t->rh_last = (uint16_t)idx;
+     for (i = 0; i < t->rh_n; i++) {
+         uint32_t p = t->rh_note[i], keep = rec_n[ti][i] + 1u < len, add = 0;
+         if (keep && s->time != ST_TIE) {
+@@ -820,7 +826,7 @@
+         }
+         if (keep) {
+             t->rh_note[k] = (uint8_t)p;
+-            rec_n[ti][k] = (uint8_t)(rec_n[ti][i] + 1u);
++            rec_n[ti][k] = (uint16_t)(rec_n[ti][i] + 1u);
+             tm |= add << k;
+             k++;
+         }
+@@ -849,7 +855,7 @@
+         return;                                     /* (recorded ahead into the step now starting) */
+     s = &t->step[idx];
+     t->rh_bak = *s;
+-    t->rh_last = (uint8_t)idx;
++    t->rh_last = (uint16_t)idx;
+     t->rh_ties++;
+     for (k = 0; k < 4u; k++)
+         s->note[k] = 0;
+@@ -962,11 +968,14 @@
+ 
+ /* the effect of key k in the FX layer (PF_N none): the first PF_M1 white keys (F3 .. E5) in order, black keys
+  * 1..6 (F#3 .. F#4) the tracks' cuts while held ((2.0) a tap: their MUTE, ui_layer.c mute_keys) */
+-static uint32_t perf_key(uint32_t k)
++static uint32_t perf_key_on_track(uint32_t k, uint32_t selected)
+ {
+     uint32_t p = key_place(k);
+-    return !key_black(k) ? (p < PF_M1 ? p : PF_N) : p < NTRK ? PF_M1 + p : PF_N;
+-}
++    return !key_black(k) ? (p < PF_M1 ? p : PF_N) : p < TRACK_KEY_COUNT ? PF_M1 + track_origin_of(selected) + p : PF_N;
++}
++
++static uint32_t perf_key(uint32_t k) { return perf_key_on_track(k, song.sel); }
++static uint32_t kb_fx;
+ 
+ /* (2.1, #74) the notes key k plays on track t into kb_chord[k], their number: its chord (chord_build), a SOLO black key's
+  * note alone (in_solo set for them). Not inlined: out of the audio ISR's own cost (tests/target_budget.txt) */
+@@ -1179,8 +1188,10 @@
+             if (lay) {                            /* a layer's button held (or locked): the key is the layer's */
+                 kb_note[k] = KB_SILENT;           /* (ui_layer.c), with FX an effect (perform.c) */
+                 kb_layer |= 1u << k;
+-                if (fx)
+-                    perf_press(perf_key(k), 1);
++                if (fx) {
++                    kb_fx |= 1u << k;
++                    perf_press(perf_key_on_track(k, kb_trk[k]), 1);
++                }
+                 continue;
+             }
+             if (song.grid == 2u)                  /* NAME (ui_name.c): every key types, none sounds */
+@@ -1199,7 +1210,10 @@
+         } else {
+             if ((kb_layer >> k) & 1u) {
+                 kb_layer &= ~(1u << k);
+-                perf_press(perf_key(k), 0);
++                if ((kb_fx >> k) & 1u) {
++                    kb_fx &= ~(1u << k);
++                    perf_press(perf_key_on_track(k, kb_trk[k]), 0);
++                }
+                 continue;
+             }
+             if (kb_note[k] == KB_SILENT)
+@@ -1635,7 +1649,7 @@
+ {
+     const step_t *s = &t->step[idx];
+     uint32_t skip = SEQ_ROLLED, i, k;
+-    t->fire_idx = (uint8_t)idx;
++    t->fire_idx = (uint16_t)idx;
+     /* the chance first (the one roll, as seq_step made it): a step that does not play applies no lock; the
+      * automation and the locks before the notes, so a note-on reads them (eng_drum's KIT, ..) */
+     if (s->cond && !step_cond_ok(t, s, ahead))      /* (Skiff) its trig condition first: not this pass, no roll */
+@@ -1695,7 +1709,7 @@
+         d = step_nudge(&t->step[nx]);
+         if (d < 0) {
+             uint32_t e = (uint32_t)-nudge_samples(d, step_samples(t, period, nx));
+-            t->early_idx = (uint8_t)nx;
++            t->early_idx = (uint16_t)nx;
+             t->early_at = cur > e ? cur - e : 0u;
+             t->nud |= NUD_EARLY;
+         }
+@@ -1794,8 +1808,9 @@
+  * later in it, 1 + its sample (mo_block_end, at the block's end, sends it then); 0 none */
+ static __attribute__((noinline)) uint32_t mo_block_begin(uint32_t n)
+ {
+-    uint32_t i, j, k0 = 0, k1 = notes_out() << 16 | mset_ch(MSET(1, 1) & 31u) << 18 | mset_ch(MSET(15, 5) >> 3) << 23 |
+-                                 (uint32_t)(song.g[G_ROUTE] != 0) << 28, pulse = 0;
++    uint32_t i, j, cfg[2] = {0, 0}, pulse = 0;
++    uint32_t control = notes_out() | mset_ch(MSET(1, 1) & 31u) << 2 |
++                       mset_ch(MSET(15, 5) >> 3) << 7 | (uint32_t)(song.g[G_ROUTE] != 0) << 12;
+     if (!clock_out()) {
+         if (mn.started) {                           /* (CLOCK OUT or CLOCK changed while started: Stop) */
+             mo_rt(0xFCu, mo.tick);
+@@ -1813,22 +1828,21 @@
+             pulse += pulse != 0u;
+         }
+     }
+-    for (i = 0; mch_io && i < NTRK; i++)
+-        if (i < 4u)
+-            k0 |= (uint32_t)mch_io[i] << (8u * i);
++    for (i = 0; i < NTRK; i++)
++        cfg[i / 4u] |= (uint32_t)mch_value(i) << (8u * (i % 4u));
++    if (cfg[0] != mn.cfg[0] || cfg[1] != mn.cfg[1] || control != mn.control) {
++        uint32_t changed[2] = {cfg[0] ^ mn.cfg[0], cfg[1] ^ mn.cfg[1]}, ends = 0;
++        if ((control ^ mn.control) & 3u)                     /* NOTES OUT changed */
++            ends = (1u << NTRK) - 1u;
+         else
+-            k1 |= (uint32_t)mch_io[i] << (8u * (i - 4u));
+-    if (k0 != mn.cfg[0] || k1 != mn.cfg[1]) {
+-        uint32_t x0 = k0 ^ mn.cfg[0], x1 = k1 ^ mn.cfg[1];   /* (a track's channel changed: its notes end, the others
+-                                                             * play on; NOTES OUT changed: all of them) */
+-        uint32_t ends = (x1 & 0x30000u) ? (1u << NTRK) - 1u :
+-                        (uint32_t)((x0 & 0xFFu) != 0u) | (uint32_t)((x0 & 0xFF00u) != 0u) << 1 |
+-                        (uint32_t)((x0 & 0xFF0000u) != 0u) << 2 | (uint32_t)((x0 >> 24) != 0u) << 3 |
+-                        (uint32_t)((x1 & 0xFFu) != 0u) << 4 | (uint32_t)((x1 & 0xFF00u) != 0u) << 5;
+-        if (x1 & 0x0F800000u)
+-            fm1_in.virt = 0;                        /* (REMOTE moved or off: its buttons let go) */
+-        mn.cfg[0] = k0;
+-        mn.cfg[1] = k1;
++            for (i = 0; i < NTRK; i++)
++                if ((changed[i / 4u] >> (8u * (i % 4u))) & 255u)
++                    ends |= 1u << i;
++        if ((control ^ mn.control) & (31u << 7))
++            fm1_in.virt = 0;                                  /* REMOTE changed */
++        mn.cfg[0] = cfg[0];
++        mn.cfg[1] = cfg[1];
++        mn.control = control;
+         if (!song.g[G_ROUTE])
+             midi_route_drop();
+         if (ends)
+--- a/firmware/src/ui.c
++++ b/firmware/src/ui.c
+@@ -38,8 +38,8 @@
+ static int32_t chain_cursor(int32_t c);
+ static void chain_top(void);
+ static int chain_tails(uint32_t k, const step_t *last, uint32_t cnt, const uint8_t *o, const uint8_t *p,
+-                       const uint8_t *n);           /* ((2.0, #44) a note across a chain's parts: bank.c) */
+-#define CT_SAME 255u                             /* (.. a tail as long as it was) */
++                       const uint16_t *n);           /* ((2.0, #44) a note across a chain's parts: bank.c) */
++#define CT_SAME UINT16_MAX                             /* (.. a tail as long as it was) */
+ static void take_part(uint32_t k, uint32_t j, uint32_t pass, step_t *tmp, uint32_t *notes, uint32_t *moves,
+                       uint32_t *full);              /* (.. a TAKE on a chain, another part's) */
+ /* (2.0, #44) the pass a chain's first part came in on this time round, and the round before's (0: no whole round of it
+@@ -189,7 +189,13 @@
+ #define SMK_KV_BYTE (favorites.factory[15][12])
+ #define SMK_MASTER_BYTE (favorites.factory[15][13])
+ #endif
+-static const uint8_t *const mch_io = &ui_mch(0);
++/* The two extra channel settings use the bytes beyond DRUM-X's custom-theme colors. */
++static const uint8_t *const mch_stock = &ui_mch(0);
++static const uint8_t *const mch_extra = &favorites.factory[14][30];
++static uint8_t *mch_setting(uint32_t k)
++{
++    return k < MCH_STOCK_TRACKS ? &ui_mch(k) : &favorites.factory[14][30 + k - MCH_STOCK_TRACKS];
++}
+ /* (2.2) MENU > MIDI's own (seq.c MSET): [15][17] NOTES OUT (bits 0..1: ALL KEYS OFF), CLOCK OUT OFF (2), CC OUT ON
+  * (3), THRU ON (4) (SKS1's midi, its rsv17 before: 0 in every older setting, the defaults); REMOTE's channel in CPU2_BYTE's bits 3..7;
+  * AUTO CHANNEL's in [1][1] bits 0..4 (DIGITAL's row: its stars byte 0 only, MIDI LEARN 2..31) */
+@@ -306,7 +312,7 @@
+     uint8_t plk_src;             /* parameter locks (ui_input.c lock_*): the sound page whose KNOB 1..4 a step held
+                                   * locks, PAGES index + 1; 0 = HOME's four */
+     uint8_t plk_lane, plk_trk;   /* .. the grid: the lane and the track of the hits plk_rm takes away */
+-    uint64_t plk_rm, plk_acc;    /* .. the grid's step keys pressed on a hit (bit = step): it goes when the key is let
++    step_mask_t plk_rm, plk_acc;    /* .. the grid's step keys pressed on a hit (bit = step): it goes when the key is let
+                                   * go, unless the key was held for a lock (its accent: plk_acc) */
+     uint8_t hot_col, hot_t;      /* column whose knob was just turned (drawn white) */
+     uint8_t menu;                /* 0 off, 1 list, 2 about + credits (HOME held) */
+@@ -1027,7 +1033,7 @@
+  * FEEL's set its steps; SHIFT + OCT- copies it, SHIFT + OCT+ pastes it at the cursor. The cursor moved any other way
+  * drops it (cursor_set). In the pool: the main loop's */
+ static struct {
+-    uint8_t a1;                  /* the range's other end + 1; 0: none (the cursor's step alone) */
++    uint16_t a1;                  /* the range's other end + 1; 0: none (the cursor's step alone) */
+     uint8_t view;                /* FEEL's tiles: the values of its knob turned last (0 CHANCE .. 3 TYPE) */
+     uint8_t picked;              /* some note picked (vp) */
+     uint8_t vp[NSTEP];           /* step i's notes picked: bit k its note[k] (they go along when they move) */
+@@ -1528,14 +1534,14 @@
+     if (t->eng_req % NENGINES == ENGI_DRUMX)     /* ((Skiff phase 9) a kit edited between two preset loads) */
+         h = fnv(h, dx_kit, sizeof dx_kit);
+     for (uint32_t j = 0; j < motion.count; j++)
+-        if ((motion.event[j].place >> 6) == k) h = fnv(h, &motion.event[j], sizeof motion.event[j]);
++        if ((MOTION_TRACK(motion.event[j].place)) == k) h = fnv(h, &motion.event[j], sizeof motion.event[j]);
+     return h ^ ((motion.on >> k) & 1u);
+ }
+ static uint32_t motion_sig(const track_t *t)     /* the track's motion only (the sound moves while it plays) */
+ {
+     uint32_t h = 2166136261u, k = trk_index(t);
+     for (uint32_t j = 0; j < motion.count; j++)
+-        if ((motion.event[j].place >> 6) == k) h = fnv(h, &motion.event[j], sizeof motion.event[j]);
++        if ((MOTION_TRACK(motion.event[j].place)) == k) h = fnv(h, &motion.event[j], sizeof motion.event[j]);
+     return h ^ ((motion.on >> k) & 1u);
+ }
+ 
+--- a/firmware/src/ui_draw.c
++++ b/firmware/src/ui_draw.c
+@@ -9,7 +9,7 @@
+ static void draw_menu(void);
+ static int name_on(void);                              /* NAME (ui_name.c) */
+ static int mom_down(void);                             /* MOMENTARY: LFO held where its turns are (ui_input.c) */
+-static uint64_t lock_held(void);                       /* parameter locks: the steps held on NOTES (ui_input.c) */
++static step_mask_t lock_held(void);                       /* parameter locks: the steps held on NOTES (ui_input.c) */
+ static void name_draw(void);
+ 
+ /* --------------------------------------------------------- drawing --- */
+@@ -657,8 +657,8 @@
+     str_cpy(s + str_len(s), pn, 16);
+     str_cpy(s + str_len(s), ti, sizeof ti);
+     {   /* step markers: the playhead only when it is in the shown bank, the cursor only in SEQ */
+-        uint32_t ph = song.playing && t->seq_idx / 16u == ui.bank ? t->seq_idx : 0xFFu;
+-        sig = str_hash(0x9E3779B9u, s) + ph * 97u + (song.seq_mode ? ui.cursor : 0xFFu) * 3001u + steps_hash(t) +
++        uint32_t ph = song.playing && t->seq_idx / 16u == ui.bank ? t->seq_idx : NSTEP;
++        sig = str_hash(0x9E3779B9u, s) + ph * 97u + (song.seq_mode ? ui.cursor : NSTEP) * 3001u + steps_hash(t) +
+               (ui.home ? 0u : page_icon(pg)) * 7121u +
+               ui.bank * 7u + (uint32_t)t->p[P_SLEN] * 13u + list_mode() * 9173u + (ui.edge_t != 0) * 5501u +
+               ui_hints_off * 3301u;
+@@ -901,7 +901,7 @@
+         if (r < n) {
+             const motion_event_t *e = &motion.event[idx[r]];
+             fmt_kn(val, (int32_t)r + 1, (int32_t)n);
+-            step = e->place & 63u;
++            step = MOTION_STEP(e->place);
+             id = MOTION_ID(e);
+             v = e->value;
+         } else {
+@@ -1070,10 +1070,10 @@
+                     mod_src_icon(MS_OFF));
+         return;
+     }
+-    if (step_page(cur_page()->graph) && lock_held()) {   /* a step held: what KNOB 1..4 lock (ui_input.c lock_turn) */
+-        uint64_t held = lock_held();
++    if (step_page(cur_page()->graph) && step_mask_any(lock_held())) {   /* a step held: what KNOB 1..4 lock (ui_input.c lock_turn) */
++        step_mask_t held = lock_held();
+         uint32_t st = 0;
+-        while (!((held >> st) & 1u))
++        while (!step_mask_has(held, st))
+             st++;                                       /* (the first step held: its values) */
+         for (c = 0; c < 4u; c++) {
+             uint32_t id = lock_id(c);
+@@ -1267,7 +1267,7 @@
+          * six: 20 px, 24 apart, design/mock_p6.py splash) */
+         uint32_t k;
+         for (k = 0; k < NTRK; k++)
+-            lcd_fill(SPL_X0 + 18u + k * 24u, 108, 20, 20, T_TRK(k));
++            lcd_fill(SPL_X0 + (SPL_SQ - (NTRK * 20u - 4u)) / 2u + k * 20u, 108, 16, 20, T_TRK(k));
+     }
+     lcd_sync();
+ }
+--- a/firmware/src/ui_events.c
++++ b/firmware/src/ui_events.c
+@@ -150,7 +150,7 @@
+     }
+     i = idx[r];
+     e = &motion.event[i];
+-    step = e->place & 63u;
++    step = MOTION_STEP(e->place);
+     id = MOTION_ID(e);
+     if (slot == 1u) {                                   /* the next step where its parameter is free */
+         uint32_t top = ev_len(t) > step ? ev_len(t) : step + 1u, m = (uint32_t)(s > 0 ? s : -s);
+@@ -239,7 +239,7 @@
+         const motion_event_t e = motion.event[idx[r]];
+         uint32_t lock = !e.lock;
+         motion_undo_take(t, 0);
+-        (void)motion_put(t, e.place & 63u, MOTION_ID(&e), e.value, lock ? MOTION_LOCK : 0u);
++        (void)motion_put(t, MOTION_STEP(e.place), MOTION_ID(&e), e.value, lock ? MOTION_LOCK : 0u);
+         motion_undo_done(t);
+         ui_message(lock ? "NOW A LOCK" : "NOW AUTOMATION");
+     }
+@@ -258,7 +258,7 @@
+     }
+     e = &motion.event[idx[r]];
+     motion_undo_take(t, 0);
+-    motion_delete_event(t, e->place & 63u, MOTION_ID(e));
++    motion_delete_event(t, MOTION_STEP(e->place), MOTION_ID(e));
+     motion_undo_done(t);
+     ui.ev_row = (uint8_t)r;                              /* (ev_row clamps it to the new count) */
+     ui_message("DELETED");
+--- a/firmware/src/ui_graph.c
++++ b/firmware/src/ui_graph.c
+@@ -312,13 +312,13 @@
+ static void graph_steps(const track_t *t, uint16_t c)
+ {
+     uint32_t i, len = (uint32_t)t->p[P_SLEN], cur = fr.on ? NSTEP : ui.cursor;
++    uint32_t base = (cur < len ? cur : len ? t->seq_idx % len : 0u) / 64u * 64u;
++    uint32_t end = len < base + 64u ? len : base + 64u;
+     int32_t sm = graph_ht < 100;                     /* MENU > LARGE's strip: rows 14 px apart, bars 10 px */
+     int32_t bh = sm ? 10 : 14, pitch = sm ? 14 : 24, y0 = sm ? 2 : 4;
+-    for (i = 0; i < NSTEP; i++) {
+-        int32_t x = bar_x(i), y = y0 + (int32_t)(i / 16u) * pitch;
++    for (i = base; i < end; i++) {
++        int32_t x = bar_x(i % 16u), y = y0 + (int32_t)((i - base) / 16u) * pitch;
+         const step_t *st = &t->step[i];
+-        if (i >= len)
+-            continue;
+         if (i % 16u == 0u && i + 16u <= len)
+             GFX_HOOK_ALIGN(0, 0, 240, 0, AL_H | AL_CELLS | AL_N(16), "step bars' row centred");
+         if (ux.crypt) {                              /* (Skiff S1) CRYPT: ASCII, # a note, - a tie, . nothing */
+@@ -353,7 +353,7 @@
+     }
+     if (!sm && !fr.on) {                             /* ((Skiff 2.0) the track's DIR, PRESETS': (2.5, 5B) its card, under
+                                                       * the rows, right (a short pattern: where the rows' fourth is) */
+-        int32_t y = y0 + (int32_t)((len + 15u) / 16u) * pitch - (pitch - bh) + 5, bot = (int32_t)graph_h() - cv_oy - 2;
++        int32_t y = y0 + (int32_t)((end - base + 15u) / 16u) * pitch - (pitch - bh) + 5, bot = (int32_t)graph_h() - cv_oy - 2;
+         uint32_t d = (uint32_t)t->p[P_DIR] % NELEM(N_DIR);   /* (bot: the panel's foot, on this scale) */
+         int lo = y + PR_CARD_H > bot;
+         if (y < 66)
+@@ -527,7 +527,7 @@
+ static void graph_tiles(const track_t *t, uint16_t c)
+ {
+     uint32_t i, len = (uint32_t)t->p[P_SLEN], base = ui.bank * 16u;
+-    uint64_t locks = motion_lock_steps(trk_index(t));
++    step_mask_t locks = motion_lock_steps(trk_index(t));
+     int32_t top = ((int32_t)cv_h - (TL_P + TL_H + 3 + AF_S_CAP_H)) / 2;
+     uint16_t empty = T_SURF, g = T_BG;
+     cv_rect(0, 0, 240, (int32_t)cv_h, T_BG);
+@@ -554,7 +554,7 @@
+             if (step_chance(st) < 100u || st->cond)
+                 cv_rect(x + 2, y + 2, 4, 4, T_INK);
+         }
+-        if ((locks >> si) & 1u)
++        if (step_mask_has(locks, si))
+             cv_rect(x + TL_W - 6, y + 2, 4, 4, on || cur ? T_INK : T_MID);
+         fmt_int(nb, (int32_t)si + 1);
+         GFX_HOOK_ALIGN(x, 0, x + TL_W, 0, AL_H, "step tile number centred");
+@@ -571,7 +571,7 @@
+ static void graph_roll(const track_t *t, uint16_t c)
+ {
+     uint32_t i, k, len = (uint32_t)t->p[P_SLEN], base = ui.bank * 16u, ncol, mask = scale_mask(t), held = pr_held();
+-    uint64_t locks = motion_lock_steps(trk_index(t));
++    step_mask_t locks = motion_lock_steps(trk_index(t));
+     int32_t r, ybot = PR_Y0 + PR_ROWS * PR_RH, gw;
+     char nb[8];
+     ncol = base < len ? (len - base < 16u ? len - base : 16u) : 0u;
+@@ -623,7 +623,7 @@
+             cv_rect(x + 5, PR_Y0, 3, ybot - PR_Y0, ux_mix(T_ACCENT, T_SURF, 60));
+         if (song.playing && si == t->seq_idx)
+             cv_rect(x + 6, PR_Y0, 1, ybot - PR_Y0, ux.crypt ? CR_GOLD : T_ACCENT);
+-        if ((locks >> si) & 1u)                       /* a parameter lock: a mark under the step */
++        if (step_mask_has(locks, si))                       /* a parameter lock: a mark under the step */
+             cv_rect(x + 3, ybot + 3, 7, 2, T_ACCENT);
+     }
+     for (i = 0; i < ncol; i++) {                      /* the notes */
+@@ -690,10 +690,10 @@
+ static void graph_grid(const track_t *t, uint16_t c)
+ {
+     uint32_t l, i, len = (uint32_t)t->p[P_SLEN], base = ui.bank * 16u;
+-    uint64_t locks = motion_lock_steps(trk_index(t));
++    step_mask_t locks = motion_lock_steps(trk_index(t));
+     int32_t y0 = 6;
+     for (i = 0; i < 16u && base + i < len; i++)     /* a parameter lock: a mark over the step */
+-        if ((locks >> (base + i)) & 1u)
++        if (step_mask_has(locks, base + i))
+             cv_rect(41 + (int32_t)i * 12, 1, 8, 2, T_ACCENT);
+     for (l = 0; l < NLANE; l++) {
+         int32_t y = y0 + 4 + (int32_t)l * 14;
+@@ -1651,14 +1651,14 @@
+  * QUARK's beam); HOME tapped: the scope, as before */
+ static void graph_names(void)
+ {
+-    uint32_t k;
++    uint32_t k, pos;
+     int32_t rh = ((int32_t)graph_h() - 8) / 3;
+     char name[20], d[2] = {0, 0};
+     cv_rect(0, 0, 240, (int32_t)graph_h(), T_BG);
+-    for (k = 0; k < NTRK; k++) {
++    for (pos = 0, k = track_key_origin(); pos < TRACK_KEY_COUNT; pos++, k++) {
+         const track_t *t = &trk[k];
+         int sel = k == song.sel, ib = sel && !ux.quark;
+-        int32_t x = 3 + (int32_t)(k / 3u) * 118, y = 2 + (int32_t)(k % 3u) * (rh + 2);
++        int32_t x = 3 + (int32_t)(pos / 3u) * 118, y = 2 + (int32_t)(pos % 3u) * (rh + 2);
+         uint16_t col = t->p[P_MUTE] ? T_DIM : T_TRK(k), lane = sel ? (ux.quark ? ux_mix(col, T_BG, 80) : col) :
+                                                                 ux.quark ? T_BG : T_SURF;
+         if (ux.crypt && !sel)
+@@ -1732,9 +1732,11 @@
+         h = (h ^ (ui.ev_top * 3u + motion_enabled(t)) * 7919u ^ motion_count(t) * 131u) * 16777619u;
+         uint8_t idx[MOTION_MAX];
+         uint32_t n = ev_rows(idx);
+-        for (i = 0; i < n; i++)
+-            h = (h ^ ((uint32_t)motion.event[idx[i]].place << 24 | (uint32_t)(motion.event[idx[i]].id | motion.event[idx[i]].lock << 8) << 15 |
+-                      (uint16_t)motion.event[idx[i]].value)) * 16777619u;
++        for (i = 0; i < n; i++) {
++            const motion_event_t *e = &motion.event[idx[i]];
++            h = (h ^ ((uint32_t)e->place << 17 | (uint32_t)e->lock << 16 | (uint32_t)e->id << 8 |
++                      (uint8_t)e->value)) * 16777619u;
++        }
+         h = (h ^ (n + 1u) * 40503u ^ ev_row(n) * 2654435761u ^ ((uint32_t)ui.ev_step << 8 | ui.ev_id) * 104729u) * 16777619u;
+     }
+ #if FELUCCA_SLICE
+@@ -1791,8 +1793,8 @@
+              drum_mute[trk_index(t)] * 2654435761u + (uint32_t)t->p[P_DIR] * 6007u;   /* ((1.3) the lanes' mutes: the
+                                                       * names dim; (2.0) PATTERN's DIR) */
+         if (pg->graph != GR_STEPS) {                 /* the parameter locks' marks (the roll, the grid) */
+-            uint64_t lk = motion_lock_steps(trk_index(t));
+-            h = (h ^ (uint32_t)lk ^ (uint32_t)(lk >> 32) * 2654435761u) * 16777619u;
++            step_mask_t lk = motion_lock_steps(trk_index(t));
++            h = fnv(h, &lk, sizeof lk);
+         }
+         if (step_page(pg->graph) && !drum_track(t)) {   /* the roll: its view, the keys held */
+             pr_follow(t);
+@@ -2016,7 +2018,7 @@
+     uint32_t k, p, r, pos;
+     cv_rect(0, 0, 240, (int32_t)cv_h, T_BG);         /* (over the panel, as HOME: the rows are on the ground) */
+     cv_bg = T_BG;
+-    for (pos = 0, k = 0; k < NTRK; pos++, k++) {        /* ((Skiff U3, N1) every track) */
++    for (pos = 0, k = track_key_origin(); pos < TRACK_KEY_COUNT; pos++, k++) {
+         int32_t y = SG_Y(pos), ty = y + 2;
+         int band = k == song.sel % NTRK, cb = band;
+         uint16_t col = T_TRK(k), g = cb ? col : g0;
+@@ -2155,9 +2157,7 @@
+             char b[16], nm[12];
+             const char *unit;
+             const param_desc_t *d = track_desc(t, id);
+-            b[0] = (char)('0' + ((e->place & 63u) + 1u) / 10u);
+-            b[1] = (char)('0' + ((e->place & 63u) + 1u) % 10u);
+-            b[2] = 0;
++            fmt_int(b, (int32_t)MOTION_STEP(e->place) + 1);
+             GFX_HOOK_ALIGN(0, y, 0, y + 16, AL_V, "list row text centred up/down");
+             cv_text_on(14, y + CAP_IN(S, 16), &AF_S, lock ? "LOCK" : "AUTO", sel ? T_INK : lock ? T_ACCENT : T_MID, bg);
+             GFX_HOOK_ALIGN(0, y, 0, y + 16, AL_V, "list row text centred up/down");
+@@ -2319,7 +2319,7 @@
+ #define MS_X(c) (4 + 39 * (int32_t)(c))
+ #define MS_FY0 52                                    /* the fader: y 52 .. 101 */
+ #define MS_FY1 102
+-static void mix_strip(uint32_t c, uint32_t sel, uint32_t st, uint32_t mute, uint32_t hot, uint32_t lvl, int32_t pan,
++static void mix_strip(uint32_t c, uint32_t pos, uint32_t sel, uint32_t st, uint32_t mute, uint32_t hot, uint32_t lvl, int32_t pan,
+                       const char *b, int large)
+ {
+     int ib = sel && !ux.quark;                       /* (the selected strip a band, INK on it; (Skiff Q3) QUARK: a tint) */
+@@ -2364,7 +2364,7 @@
+         cv_rect(4, 53, gw, 3, line);
+         if (m)
+             cv_rect(4, 53, m * gw / (TS_MH - 2), 3, ib ? T_INK : T_MID);
+-        cv_blit((uint32_t)MS_X(c), LG_Y_GRAPH);
++        cv_blit((uint32_t)MS_X(pos), LG_Y_GRAPH);
+         return;
+     }
+     {   /* LEVEL: the fader from its foot, its cap; the meter beside it */
+@@ -2419,15 +2419,15 @@
+     pan_txt(v, pan);
+     GFX_HOOK_ALIGN(0, 0, MS_W, 0, AL_H, "mixer strip value centred across");
+     cv_text_in(0, 123, MS_W, &AF_S, v, ib ? T_INK : hot == 2u ? T_ACCENT : T_MID, g);
+-    cv_blit((uint32_t)MS_X(c), Y_GRAPH);
++    cv_blit((uint32_t)MS_X(pos), Y_GRAPH);
+ }
+ static void draw_tracks(void)
+ {
+     uint32_t c, pos, sk = strip_kind() == SK_TRK;
+     if (ui.force) {
+         if (NTRK > 4u)                               /* the six strips are the panel's full height: only the gaps */
+-            for (c = 0, pos = 0; c <= NTRK; c++) {   /* between them, so a track change doesn't flash them (#15) */
+-                int32_t r = c < NTRK ? MS_X(c) : 240;
++            for (c = 0, pos = 0; c <= TRACK_KEY_COUNT; c++) {   /* between them, so a track change doesn't flash them (#15) */
++                int32_t r = c < TRACK_KEY_COUNT ? MS_X(c) : 240;
+                 lcd_fill(pos, graph_y(), (uint32_t)r - pos, graph_h(), T_BG);
+                 pos = (uint32_t)(r + MS_W);
+             }
+@@ -2443,7 +2443,7 @@
+             m = ts.meter[c] - 1;                     /* falls ~2 dB a frame */
+         ts.meter[c] = (uint8_t)(m < 0 ? 0 : m);
+     }
+-    for (pos = 0, c = NTRK > 4u ? 0u : trk_top(); pos < (NTRK > 4u ? NTRK : 4u) && c < NTRK; pos++, c++) {   /* ((U3, N1)
++    for (pos = 0, c = track_key_origin(); pos < TRACK_KEY_COUNT; pos++, c++) {   /* ((U3, N1)
+                                                                             * every track; four: as phase 6) */
+         track_t *t = &trk[c];
+         uint32_t sel = c == song.sel, lvl = trk_level(c), mute = t->p[P_MUTE] != 0;
+@@ -2461,7 +2461,7 @@
+             continue;
+         ts.col[pos] = sig;
+         if (NTRK > 4u) {                             /* ((Skiff U3, N1) six strips) */
+-            mix_strip(c, sel, st, mute, hot, lvl, pan, b, (int)sk);
++            mix_strip(c, pos, sel, st, mute, hot, lvl, pan, b, (int)sk);
+             continue;
+         }
+         if (sk) {
+@@ -2620,13 +2620,13 @@
+  * floor, its number under it */
+ static void cr_creatures(void)
+ {
+-    static const uint8_t *const ART[NTRK] = {SPR_CR_SKULL, SPR_CR_GHOST, SPR_CR_CANDLE, SPR_CR_WITCH, SPR_CR_MONK,
++    static const uint8_t *const ART[TRACK_KEY_COUNT] = {SPR_CR_SKULL, SPR_CR_GHOST, SPR_CR_CANDLE, SPR_CR_WITCH, SPR_CR_MONK,
+                                              SPR_CR_DEMON};
+-    uint32_t k;
+-    for (k = 0; k < NTRK; k++) {
+-        int32_t x = 9 + (int32_t)k * 37, muted = trk[k].p[P_MUTE] != 0;
++    uint32_t k, pos;
++    for (pos = 0, k = track_key_origin(); pos < TRACK_KEY_COUNT; pos++, k++) {
++        int32_t x = 9 + (int32_t)pos * 37, muted = trk[k].p[P_MUTE] != 0;
+         char d[2] = {(char)('1' + k), 0};
+-        cr_creature(x, (int32_t)cv_h - 22 - ART[k][1] * 6, ART[k], scd.lv[k], T_TRK(k), muted,
++        cr_creature(x, (int32_t)cv_h - 22 - ART[pos][1] * 6, ART[pos], scd.lv[k], T_TRK(k), muted,
+                     (ui.frame / 2u + k) * 2654435761u);
+         GFX_HOOK_ALIGN(x, (int32_t)cv_h - 19, x + 35, (int32_t)cv_h - 7, AL_HV, "scope creature's number under it");
+         cv_text_in(x, (int32_t)cv_h - 19 + CAP_IN(S, 12), 35, &AF_S, d, muted ? T_DIM : T_TRK(k), T_SURF);
+--- a/firmware/src/ui_home.c
++++ b/firmware/src/ui_home.c
+@@ -52,13 +52,13 @@
+ #define HL_C_CELL_H 12
+ static void graph_tracks(void)
+ {
+-    uint32_t k, i, n;
++    uint32_t k, i, n, end = track_key_origin() + TRACK_KEY_COUNT;
+     int32_t tx = -1, ty = 0;                          /* (Skiff C3) CRYPT: the torch's place (the selected track's playhead) */
+     int32_t qx = -1, qy = 0;                          /* (Skiff Q3) QUARK: the collision's (the same) */
+-    int six = (int32_t)NTRK * (HL_H + 3) - 3 > (int32_t)graph_h();
+-    int32_t y = six ? ((int32_t)graph_h() - (HL_H + ((int32_t)NTRK - 1) * (HL_C_H + 3))) / 2 : 0;
++    int six = (int32_t)TRACK_KEY_COUNT * (HL_H + 3) - 3 > (int32_t)graph_h();
++    int32_t y = six ? ((int32_t)graph_h() - (HL_H + ((int32_t)TRACK_KEY_COUNT - 1) * (HL_C_H + 3))) / 2 : 0;
+     cv_rect(0, 0, 240, (int32_t)graph_h(), T_BG);      /* (over the panel: the lanes are its tiles) */
+-    for (k = 0; k < NTRK; k++) {
++    for (k = track_key_origin(); k < end; k++) {
+         const track_t *t = &trk[k];
+         const step_t *s = t->step;
+         uint32_t first = hl_bar(t, &n), play = t->seq_idx % 16u;
+@@ -84,7 +84,7 @@
+             cv_rect(HL_STEP_X - 2, y + h / 2 - 3, 236 - HL_STEP_X + 2, 1, T_LINE);
+             cv_rect(HL_STEP_X - 2, y + h / 2 + 3, 236 - HL_STEP_X + 2, 1, T_LINE);
+         }
+-        if (ux.neon && k + 1u < NTRK)
++        if (ux.neon && k + 1u < end)
+             for (i = 6; i < 234u; i += 10u)
+                 cv_rect((int32_t)i, y + h + 1, 5, 1, ux_mix(NE_YELLOW, T_BG, 65));
+         text_ink(big ? &AF_V : &AF_M, d, b);             /* the number itself: the colour on SURF, INK on the band */
+--- a/firmware/src/ui_input.c
++++ b/firmware/src/ui_input.c
+@@ -91,12 +91,12 @@
+     uint32_t i, g;
+     if (ui.home) {
+         d = home_param(k, &vp);
+-    } else if (pg->scope == SC_TRK && !lock_held()) {  /* MIXER: the selected track's LEVEL PAN REVERB MUTE */
++    } else if (pg->scope == SC_TRK && !step_mask_any(lock_held())) {  /* MIXER: the selected track's LEVEL PAN REVERB MUTE */
+         static const uint8_t MIX_ID[4] = {P_LEVEL, P_PAN, P_REV, P_MUTE};   /* (tracks_edit's knobs) */
+         vp = &TSEL->p[MIX_ID[k & 3u]];
+         d = &TP[MIX_ID[k & 3u]];
+     } else {
+-        if (act_cols() || lock_held() || !(pg->scope == SC_TRACK || pg->scope == SC_ENGINE || pg->scope == SC_GLOBAL) ||
++        if (act_cols() || step_mask_any(lock_held()) || !(pg->scope == SC_TRACK || pg->scope == SC_ENGINE || pg->scope == SC_GLOBAL) ||
+             pg->graph == GR_EVENTS || pg->graph == GR_SONG || pg->graph == GR_BROWSE || pg->graph == GR_USER ||
+             pg->graph == GR_BANK || sheet_of(pg->graph) || (pg->graph == GR_SLICES && k < 2u) ||
+             (pg->graph == GR_MOD && k == 0u))
+@@ -269,8 +269,7 @@
+     const track_t *t = TSEL;
+     const step_t *st;
+     uint32_t i, k, note, used = 0, m = 0;
+-    if (ui.home || ui.menu || ui.confirm || !song.seq_mode || !step_page(cur_page()->graph) || song.playing ||
+-        ui.cursor >= NSTEP)
++    if (ui.home || ui.menu || ui.confirm || !song.seq_mode || !step_page(cur_page()->graph) || song.playing)
+         return 0;
+     st = &t->step[ui.cursor];
+     if (!st->n || st->time == ST_REST)
+@@ -702,7 +701,7 @@
+ }
+ /* the copy folded back into t's steps 1..len and written at once; the steps in keep (bit i) stay unfolded (step entry
+  * goes on writing them). A step that can be a TIE is one (a pattern left without overlaps: as 1.4 has it) */
+-static void ed_close(track_t *t, step_t *w, uint32_t len, uint64_t keep)
++static void ed_close(track_t *t, step_t *w, uint32_t len, step_mask_t keep)
+ {
+     step_t o, po, pu, cur, last = w[len ? len - 1u : 0u];
+     uint32_t i, k, m, held, same;
+@@ -711,7 +710,7 @@
+         ed_unfold(&o, &t->step[i], i ? &po : 0);
+         for (held = i > 0u && !cur.hit && cur.time == ST_NOTE, m = held ? ed_cont(&pu) : 0u, k = 0; held && k < cur.n; k++)
+             held = step_tied(&cur, k) && note_at(&pu, cur.note[k]) >= 0 && ((m >> note_at(&pu, cur.note[k])) & 1u);
+-        held = held && (uint32_t)__builtin_popcount(m) == cur.n && !((keep >> i) & 1u);   /* (what goes on: just what
++        held = held && (uint32_t)__builtin_popcount(m) == cur.n && !step_mask_has(keep, i);   /* (what goes on: just what
+                                                        * sounded before) */
+         same = !memcmp(&cur, &o, sizeof o);
+         if (same && t->step[i].time == ST_TIE && held)
+@@ -793,7 +792,8 @@
+         }
+     run_undo(t, SN_PITCH);
+     {   /* ((2.0, #44) a note going on into a chain's next part: its tail moves with it) */
+-        uint8_t o[4], q[4], n[4] = {CT_SAME, CT_SAME, CT_SAME, CT_SAME}, c = 0;
++        uint8_t o[4], q[4], c = 0;
++        uint16_t n[4] = {CT_SAME, CT_SAME, CT_SAME, CT_SAME};
+         for (k = 0; len && k < w[len - 1u].n && c < 4u; k++)
+             if ((mv[len - 1u] >> k) & 1u) {
+                 o[c] = w[len - 1u].note[k];
+@@ -806,7 +806,7 @@
+         for (k = 0; k < w[j].n; k++)
+             if ((mv[j] >> k) & 1u)
+                 last_note = w[j].note[k] = (uint8_t)scale_step(t, w[j].note[k], d);
+-    ed_close(t, w, len, 0);
++    ed_close(t, w, len, STEP_MASK_EMPTY);
+     run_done(t);
+ }
+ 
+@@ -829,9 +829,9 @@
+     f = motion_guard();
+     for (j = 0; j < motion.count; j++) {
+         motion_event_t *e = &motion.event[j];
+-        uint32_t p = e->place & 63u;
+-        if ((e->place >> 6) == k && p >= x0 && p <= x1)
+-            e->place = (uint16_t)(k << 6 | (u > 0 ? (p == x1 ? x0 : p + 1u) : (p == x0 ? x1 : p - 1u)));
++        uint32_t p = MOTION_STEP(e->place);
++        if ((MOTION_TRACK(e->place)) == k && p >= x0 && p <= x1)
++            e->place = (uint16_t)(MOTION_PLACE(k, (u > 0 ? (p == x1 ? x0 : p + 1u) : (p == x0 ? x1 : p - 1u))));
+     }
+     motion_unguard(f);
+ }
+@@ -849,15 +849,15 @@
+ /* (2.0, #25) step i's automation and locks to step d (one at d of the same parameter goes) */
+ static void motion_step_move(track_t *t, uint32_t i, uint32_t d)
+ {
+-    uint32_t f = motion_guard(), k = trk_index(t), pi = k << 6 | i, pd = k << 6 | d, x, y, n = 0;
++    uint32_t f = motion_guard(), k = trk_index(t), pi = MOTION_PLACE(k, i), pd = MOTION_PLACE(k, d), x, y, n = 0;
+     motion_restore(t);
+-    for (x = 0; x < motion.count; x++)                  /* (the one moving there takes its place; 511: no track's) */
++    for (x = 0; x < motion.count; x++)                  /* (the one moving there takes its place; the sentinel belongs to no track) */
+         for (y = 0; motion.event[x].place == pd && y < motion.count; y++)
+             if (motion.event[y].place == pi && MOTION_ID(&motion.event[y]) == MOTION_ID(&motion.event[x]))
+-                motion.event[x].place = 511u;
++                motion.event[x].place = MOTION_PLACE_NONE;
+     for (x = 0; x < motion.count; x++) {
+         motion_event_t e = motion.event[x];
+-        if (e.place == 511u)
++        if (e.place == MOTION_PLACE_NONE)
+             continue;
+         if (e.place == pi)
+             e.place = (uint16_t)pd;
+@@ -877,7 +877,7 @@
+ {
+     step_t w[NSTEP];
+     uint8_t mv[NSTEP], nvp[NSTEP], ps[4];
+-    uint64_t moved = 0;
++    step_mask_t moved = STEP_MASK_EMPTY;
+     uint32_t len = (uint32_t)t->p[P_SLEN], hi = sel_hi() < len ? sel_hi() : len - 1u, b0 = NSTEP, b1 = 0, i, j, k, np,
+              whole = (uint32_t)sel_whole(t), clean = 1;
+     ed_open(w, t, len);
+@@ -923,12 +923,12 @@
+             }
+             if (whole || !had)
+                 ed_vals(&w[d], &from);
+-            moved |= (uint64_t)1 << i;                  /* (what is left at i: notes going on only, no values: ed_del) */
++            step_mask_set(&moved, i);                  /* (what is left at i: notes going on only, no values: ed_del) */
+         }
+         run_undo(t, SN_MOVE);
+-        ed_close(t, w, len, 0);
++        ed_close(t, w, len, STEP_MASK_EMPTY);
+         for (i = u > 0 ? hi : b0; whole && i >= b0 && i <= hi; i = (uint32_t)((int32_t)i - u))
+-            if ((moved >> i) & 1u)
++            if (step_mask_has(moved, i))
+                 motion_step_move(t, i, i + (uint32_t)u);   /* (its automation and locks along) */
+     }
+     run_done(t);
+@@ -936,7 +936,7 @@
+         memcpy(nsel.vp, nvp, sizeof nvp);
+     ui.cursor = (uint8_t)clamp((int32_t)ui.cursor + u, 0, (int32_t)len - 1);   /* (the selection along) */
+     if (nsel.a1)
+-        nsel.a1 = (uint8_t)clamp((int32_t)nsel.a1 + u, 1, (int32_t)len);
++        nsel.a1 = (uint16_t)clamp((int32_t)nsel.a1 + u, 1, (int32_t)len);
+     ui.bank = (uint8_t)(ui.cursor / 16u);
+ }
+ 
+@@ -948,7 +948,8 @@
+ {
+     step_t w[NSTEP];
+     uint32_t len = (uint32_t)t->p[P_SLEN], n = c >= LEN_STEPS ? (uint32_t)(c - LEN_STEPS) + 2u : 1u, k, j, e, p, in = 0;
+-    uint8_t to[4], tn[4], cnt = 0;                       /* ((2.0, #44) tails in a chain's next part) */
++    uint8_t to[4], cnt = 0;
++    uint16_t tn[4];                       /* ((2.0, #44) tails in a chain's next part) */
+     ed_open(w, t, len);
+     for (k = 0; k < w[i].n; k++) {
+         if (step_tied(&w[i], k) || (m && !((m >> k) & 1u)))
+@@ -962,13 +963,13 @@
+             }
+         if ((e + 1u == len || i + j == len) && cnt < 4u) {   /* (at the part's end before or now: its tail, the rest */
+             to[cnt] = (uint8_t)p;                            /* of it, or none) */
+-            tn[cnt++] = (uint8_t)(i + j == len ? n - j : 0u);
++            tn[cnt++] = (uint16_t)(i + j == len ? n - j : 0u);
+         }
+     }
+     for (k = 0; k < cnt; k++)                                /* (no next part, no room there: the pattern's end) */
+         if (chain_tails(trk_index(t), 0, 1, &to[k], &to[k], &tn[k]) && tn[k])
+             in = in ? in : len + 1u;
+-    ed_close(t, w, len, 0);
++    ed_close(t, w, len, STEP_MASK_EMPTY);
+     if (c >= LEN_STEPS || c == motion_base_value(t, P_SGATE))
+         motion_delete_event(t, i, P_SGATE);
+     else
+@@ -1204,10 +1205,10 @@
+             ed_vals(s, c);
+     }
+     tl_undo_take(t, SN_PASTE);
+-    ed_close(t, w, len, 0);
++    ed_close(t, w, len, STEP_MASK_EMPTY);
+     run_done(t);
+     sel_drop();
+-    nsel.a1 = (uint8_t)(at + n);                       /* (the steps pasted: at .. at + n - 1) */
++    nsel.a1 = (uint16_t)(at + n);                       /* (the steps pasted: at .. at + n - 1) */
+     str_cpy(b, "PASTED", sizeof b);
+     if (on) {                                         /* PASTED ON CLAP */
+         str_cpy(b + 6, " ON ", 5);
+@@ -1228,19 +1229,19 @@
+ {
+     step_t w[NSTEP];
+     uint32_t len = (uint32_t)t->p[P_SLEN], j, e, p;
+-    uint64_t gone = 0;
++    step_mask_t gone = STEP_MASK_EMPTY;
+     ed_open(w, t, len);
+     while (w[i].n) {
+         for (p = w[i].note[0], e = ed_end(w, len, i, p), j = i; j <= e; j++) {
+             ed_del(&w[j], (uint32_t)note_at(&w[j], p));
+-            gone |= (uint64_t)(!w[j].n && !w[j].hit) << j;
++            if (!w[j].n && !w[j].hit) step_mask_set(&gone, j);
+         }
+     }
+     step_clear(&w[i]);
+-    gone |= (uint64_t)1 << i;
+-    ed_close(t, w, len, 0);
++    step_mask_set(&gone, i);
++    ed_close(t, w, len, STEP_MASK_EMPTY);
+     for (j = i; j < len; j++)
+-        if ((gone >> j) & 1u)
++        if (step_mask_has(gone, j))
+             (void)motion_clear_locks(t, j);
+ }
+ /* SHIFT + EDIT on NOTES or FEEL, REC armed or not: the picked notes deleted, none picked every note starting in the
+@@ -1250,7 +1251,7 @@
+ {
+     step_t w[NSTEP];
+     uint32_t len = (uint32_t)t->p[P_SLEN], hi = sel_hi() < len ? sel_hi() : len - 1u, i, j, k, e, p, n = 0, any = 0;
+-    uint64_t gone = 0;
++    step_mask_t gone = STEP_MASK_EMPTY;
+     char b[24];
+     for (i = sel_lo(); i <= hi; i++)
+         any |= sel_step(t, i) || tie_alone(t, i);
+@@ -1262,7 +1263,7 @@
+     for (i = sel_lo(); i <= hi; i++) {
+         if (tie_alone(t, i)) {
+             step_clear(&w[i]);
+-            gone |= (uint64_t)1 << i;
++            step_mask_set(&gone, i);
+             continue;
+         }
+         if (!sel_step(t, i))
+@@ -1271,20 +1272,20 @@
+             if (sel_voice(i, k) && !step_tied(&w[i], k))
+                 for (n++, p = w[i].note[k], e = ed_end(w, len, i, p), j = i; j <= e; j++) {
+                     ed_del(&w[j], (uint32_t)note_at(&w[j], p));
+-                    gone |= (uint64_t)(!w[j].n && !w[j].hit) << j;
++                    if (!w[j].n && !w[j].hit) step_mask_set(&gone, j);
+                 }
+         if (!nsel.picked && w[i].hit) {
+             n += (uint32_t)__builtin_popcount(w[i].hit);
+             w[i].hit = 0;
+             if (!w[i].n)
+                 step_clear(&w[i]);
+-            gone |= (uint64_t)(!w[i].n) << i;
++            if (!w[i].n) step_mask_set(&gone, i);
+         }
+     }
+     run_undo(t, SN_DEL);
+-    ed_close(t, w, len, 0);
++    ed_close(t, w, len, STEP_MASK_EMPTY);
+     for (j = 0; j < len; j++)
+-        if ((gone >> j) & 1u)
++        if (step_mask_has(gone, j))
+             (void)motion_clear_locks(t, j);
+     run_done(t);
+     sel_drop();
+@@ -1319,11 +1320,11 @@
+                 continue;                               /* past LEN: no step there */
+             {   /* a hit (an accent) there goes when the key is let go, unless it was held for a lock (lock_keys) */
+                 const step_t *st = &TSEL->step[i];
+-                uint64_t b = (uint64_t)1 << i;
+                 uint32_t acc = (uint32_t)black_held(GK_ACC);
+                 if (((acc ? step_accents(st) : step_lanes(st)) >> ui.lane) & 1u) {
+-                    ui.plk_rm |= b;
+-                    ui.plk_acc = acc ? ui.plk_acc | b : ui.plk_acc & ~b;
++                    step_mask_set(&ui.plk_rm, i);
++                    if (acc) step_mask_set(&ui.plk_acc, i);
++                    else step_mask_clear(&ui.plk_acc, i);
+                     ui.plk_lane = ui.lane;
+                     ui.plk_trk = song.sel;
+                 } else if (acc) {
+@@ -1349,53 +1350,59 @@
+  * and not at all when it was held for a lock), on the roll the step being entered (its note keys held). [EDIT]
+  * tapped meanwhile clears the held steps' locks (EDIT alone still clears the step, its locks with it). Not while a
+  * song plays (STOP TO EDIT). A lock is a motion record (motion.c): AUTOMATION's PLAY plays it, CLEAR clears it */
+-static uint64_t lock_held(void)
++static step_mask_t lock_held(void)
+ {
+     const track_t *t = TSEL;
+     uint32_t k, len = (uint32_t)t->p[P_SLEN], keys = fm1_in.notes & ~kb_layer;
+-    uint64_t m = 0;
++    step_mask_t m = STEP_MASK_EMPTY;
+     if (ui.home || ui.menu || ui.confirm || ui.layer || name_on() || !song.seq_mode || !step_page(cur_page()->graph) ||
+         !keys)
+-        return 0;
+-    if (!grid_on())                                     /* the roll: the step being entered */
+-        return ui.entry_open && !live_rec_sel() && ui.cursor < len ? (uint64_t)1 << ui.cursor : 0u;
++        return m;
++    if (!grid_on()) {                                   /* the roll: the step being entered */
++        if (ui.entry_open && !live_rec_sel() && ui.cursor < len)
++            step_mask_set(&m, ui.cursor);
++        return m;
++    }
+     for (k = 0; k < 27u; k++)
+         if (((keys >> k) & 1u) && !key_black(k) && ui.bank * 16u + key_place(k) < len)
+-            m |= (uint64_t)1 << (ui.bank * 16u + key_place(k));
++            step_mask_set(&m, ui.bank * 16u + key_place(k));
+     return m;
+ }
+ 
+ /* each pass, before the grid's keys: a hit pressed on goes once its key is let go (plk_rm, grid_keys) */
+ static void lock_keys(void)
+ {
+-    uint64_t gone = ui.plk_rm & ~lock_held();
++    step_mask_t gone = ui.plk_rm;
+     uint32_t i;
+-    for (i = 0; gone && i < NSTEP; i++)
+-        if ((gone >> i) & 1u) {
+-            if ((ui.plk_acc >> i) & 1u)
++    if (!step_mask_any(gone))
++        return;
++    step_mask_remove(&gone, lock_held());
++    for (i = 0; i < NSTEP; i++)
++        if (step_mask_has(gone, i)) {
++            if (step_mask_has(ui.plk_acc, i))
+                 grid_acc(&trk[ui.plk_trk % NTRK], i, ui.plk_lane, 0);
+             else
+                 grid_hit(&trk[ui.plk_trk % NTRK], i, ui.plk_lane, 0);
+         }
+-    ui.plk_rm &= ~gone;
++    step_mask_remove(&ui.plk_rm, gone);
+ }
+ 
+ /* KNOB k turned s with the steps `held` held: each gets (or changes) its lock of lock_id(k), from its lock or the
+  * sound's own value */
+-static void lock_turn(uint32_t k, int32_t s, uint64_t held)
++static void lock_turn(uint32_t k, int32_t s, step_mask_t held)
+ {
+     track_t *t = TSEL;
+     uint32_t id = lock_id(k), i;
+     const param_desc_t *d;
+     if (id == 0xFFu)
+         return;                                         /* (an empty card: nothing to lock) */
+-    ui.plk_rm &= ~held;                                 /* (held for a lock: its hit stays) */
++    step_mask_remove(&ui.plk_rm, held);                                 /* (held for a lock: its hit stays) */
+     d = track_desc(t, id);
+     s = accel(EN_K1 + k, s, d->fmt == F_ENUM ? 0 : d->max - d->min);
+     motion_undo_take(t, 0x100u | k);                    /* (1.1.5: SAVE held takes the locks back) */
+     for (i = 0; i < NSTEP; i++) {
+         int16_t v;
+-        if (!((held >> i) & 1u))
++        if (!step_mask_has(held, i))
+             continue;
+         if (!motion_lock_get(t, i, id, &v))
+             v = motion_base_value(t, id);
+@@ -1406,17 +1413,19 @@
+ }
+ 
+ /* [EDIT] with the steps `held` held: their locks go */
+-static void lock_clear(uint64_t held)
++static void lock_clear(step_mask_t held)
+ {
+     uint32_t i, n = 0;
+-    ui.plk_rm &= ~held;
+-    if (!(motion_lock_steps(song.sel) & held)) {
++    step_mask_remove(&ui.plk_rm, held);
++    step_mask_t unlocked = held;
++    step_mask_remove(&unlocked, motion_lock_steps(song.sel));
++    if (!memcmp(&unlocked, &held, sizeof held)) {
+         ui_message("NO LOCKS");
+         return;
+     }
+     motion_undo_take(TSEL, 0);                          /* (1.1.5: SAVE held brings them back) */
+     for (i = 0; i < NSTEP; i++)
+-        if ((held >> i) & 1u)
++        if (step_mask_has(held, i))
+             n += motion_clear_locks(TSEL, i);
+     motion_undo_done(TSEL);
+     ui_message(n ? "LOCKS CLEARED" : "NO LOCKS");
+@@ -1826,14 +1835,15 @@
+ {
+     step_t w[NSTEP];
+     uint32_t len = (uint32_t)t->p[P_SLEN], k, j;
+-    uint64_t keep = (uint64_t)1 << i;
++    step_mask_t keep = STEP_MASK_EMPTY;
++    step_mask_set(&keep, i);
+     ed_open(w, t, len);
+     for (k = w[i].n; k-- > 0u;)
+         if (!step_tied(&w[i], k))
+             (void)ed_lift(w, len, i, w[i].note[k]);
+     w[i].time = ST_NOTE;
+     for (j = i + 1u; j < len && step_ties(&w[j]); j++)  /* (the steps the notes going on go on: unfolded too, so */
+-        keep |= (uint64_t)1 << j;                      /* what the keys write here isn't held by a TIE after it) */
++        step_mask_set(&keep, j);                      /* what the keys write here isn't held by a TIE after it) */
+     ed_close(t, w, len, keep);
+ }
+ /* SEQ step entry = step recording (1.2, Discussion #133: only with the track armed and the transport stopped), acid
+@@ -1897,7 +1907,7 @@
+     if (ui.home || ui.menu || ui.confirm || !song.seq_mode || !(step_page(g) || g == GR_FEEL))
+         return 0;
+     if (!nsel.a1)
+-        nsel.a1 = (uint8_t)(ui.cursor + 1u);
++        nsel.a1 = (uint16_t)(ui.cursor + 1u);
+     ui.cursor = (uint8_t)clamp((int32_t)ui.cursor + s, 0, (int32_t)len - 1);
+     ui.bank = (uint8_t)(ui.cursor / 16u);
+     ui.entry_open = 0;
+@@ -2087,10 +2097,10 @@
+         return 0;
+     }
+     if (b == B_EDIT && song.seq_mode && !ui.home && step_page(cur_page()->graph) &&
+-        (lock_held() || ((song.rec >> song.sel) & 1u))) {   /* STEP: a step held, its locks; (Skiff U2) armed, EDIT
++        (step_mask_any(lock_held()) || ((song.rec >> song.sel) & 1u))) {   /* STEP: a step held, its locks; (Skiff U2) armed, EDIT
+                                                          * deletes the cursor step (step entry); else the EDIT pages */
+-        uint64_t held = lock_held();
+-        if (held) {                                     /* a step held: its locks (the step stays) */
++        step_mask_t held = lock_held();
++        if (step_mask_any(held)) {                                     /* a step held: its locks (the step stays) */
+             lock_clear(held);
+             return 1;
+         }
+@@ -2632,13 +2642,13 @@
+     for (k = 0; k < 4u && !kq; k++) {
+         const page_t *pg = cur_page();
+         int16_t *hv;
+-        uint64_t held;
++        step_mask_t held;
+         if ((s = panel_enc(EN_K1 + k)) == 0)
+             continue;
+         if (mom_down())                                 /* ((1.3) LFO + a knob, MOMENTARY or not: LFO's release opens no
+                                                          * page) */
+             ui.pg_down &= (uint16_t)~(1u << panel.btn[B_LFO]);
+-        if ((held = lock_held()) != 0u) {               /* a step held on NOTES: KNOB k locks (parameter locks) */
++        if (step_mask_any(held = lock_held())) {               /* a step held on NOTES: KNOB k locks (parameter locks) */
+             lock_turn(k, s, held);
+             ui.hot_col = (uint8_t)k;
+             ui.hot_t = 40;
+--- a/firmware/src/ui_layer.c
++++ b/firmware/src/ui_layer.c
+@@ -528,53 +528,53 @@
+  * keys F#3 .. F#4: MUTE T1..T6 */
+ enum { GW_ALL = 8, GW_FILL, GW_TAP, GW_NONE };
+ static const uint8_t GLO_W[9] = {0, 1, 2, 3, 4, 5, GW_ALL, GW_FILL, GW_TAP};
+-_Static_assert(NTRK <= 6u, "GLO: a SOLO key for every track");
+-static uint32_t glo_white(uint32_t k)
++static uint32_t glo_white(uint32_t k, uint32_t origin)
+ {
+     uint32_t p = key_place(k);
+-    return !key_black(k) && p < sizeof GLO_W ? GLO_W[p] : GW_NONE;
++    return !key_black(k) && p < sizeof GLO_W ? (p < TRACK_KEY_COUNT ? origin + p : GLO_W[p]) : GW_NONE;
+ }
+ 
+ /* (2.0, D 1A, design/mockups/v2_mutes.png) the black keys 1..6 in GLO, FX and PERFORM: each track's MUTE, alike. A tap
+  * (let go within MENU's HOLD) toggles it, latched and saved: GLO's and FX's at once, PERFORM's at its LAUNCH point
+  * (mute_switch); held, the track is cut while it is: FX's from the press (the ISR: perf_held), GLO's from the press,
+  * PERFORM's once it is a hold (perf_cut). Each pass, before the layer's keys */
+-static struct { uint8_t dn, cut, l[NTRK]; uint32_t t0[NTRK]; } mk __attribute__((section(".pool")));
++static struct { uint8_t dn, l[TRACK_KEY_COUNT]; uint32_t t0[TRACK_KEY_COUNT]; } mk __attribute__((section(".pool")));
+ static int trk_cut(uint32_t t)                          /* track t cut by a black key held now */
+ {
+     return !perf_kill && ((((perf_held >> PF_M1) | perf_cut) >> t) & 1u);
+ }
+ static void mute_keys(uint32_t l, uint32_t keys)
+ {
+-    uint32_t k, p, b, now = fm1_ms, hold = HOLD_MS[settings_hold % 4u];
++    uint32_t k, cut = 0, now = fm1_ms, hold = HOLD_MS[settings_hold % 4u];
+     for (k = 0; k < 27u; k++) {
+-        if (!key_black(k) || (p = key_place(k)) >= NTRK)
++        uint32_t p = key_place(k);
++        if (!key_black(k) || p >= TRACK_KEY_COUNT)
+             continue;
+-        b = 1u << p;
++        uint32_t b = 1u << p, t = track_origin_of(kb_trk[k]) + p;
+         if (((keys >> k) & 1u) && (l == LAYER_GLO || l == LAYER_FX || l == LAYER_PERF)) {
+             mk.dn |= (uint8_t)b;
+             mk.l[p] = (uint8_t)l;
+             mk.t0[p] = now;
+-            if (l == LAYER_GLO)
+-                mk.cut |= (uint8_t)b;
+-        } else if ((mk.dn & b) && !((kb_layer >> k) & 1u)) {   /* let go: a tap toggles it */
++        }
++        if (!(mk.dn & b))
++            continue;
++        if (!((kb_layer >> k) & 1u)) {
+             mk.dn &= (uint8_t)~b;
+-            mk.cut &= (uint8_t)~b;
+             if (now - mk.t0[p] < hold && mk.l[p] == LAYER_PERF)
+-                mute_switch(p);
++                mute_switch(t);
+             else if (now - mk.t0[p] < hold)
+-                trk[p].p[P_MUTE] = (int16_t)!trk[p].p[P_MUTE];
+-        } else if ((mk.dn & b) && mk.l[p] == LAYER_PERF && now - mk.t0[p] >= hold) {
+-            mk.cut |= (uint8_t)b;                       /* (PERFORM: a hold cuts from here) */
+-        }
+-    }
+-    perf_cut = mk.cut;
++                trk[t].p[P_MUTE] = (int16_t)!trk[t].p[P_MUTE];
++        } else if (mk.l[p] == LAYER_GLO || (mk.l[p] == LAYER_PERF && now - mk.t0[p] >= hold)) {
++            cut |= 1u << t;
++        }
++    }
++    perf_cut = (uint8_t)cut;
+ }
+ 
+ /* a key pressed in layer l (k: 0 = F3 .. 26 = G5) */
+ static void layer_key(uint32_t l, uint32_t k)
+ {
+-    uint32_t p = key_place(k), i, w = glo_white(k);
++    uint32_t p = key_place(k), i, w = glo_white(k, track_origin_of(kb_trk[k]));
+     if (l == LAYER_GLO) {                               /* ((2.0) the black keys' MUTE: mute_keys) */
+         if (w < NTRK) {
+             lys.solo |= 1u << k;                        /* (layer_masks: perf_solo while held) */
+@@ -626,7 +626,7 @@
+     lys.solo &= kb_layer;
+     for (k = 0; k < 27u; k++)
+         if ((lys.solo >> k) & 1u)
+-            s |= 1u << glo_white(k);               /* ((Skiff phase 6) the track it solos) */
++            s |= 1u << glo_white(k, track_origin_of(kb_trk[k]));               /* ((Skiff phase 6) the track it solos) */
+     perf_solo = (uint8_t)s;
+     lys.fill &= kb_layer;                               /* (Skiff) FILL: while its key is held in the layer */
+     seq_fill = lys.fill != 0u;
+@@ -805,14 +805,14 @@
+     for (k = 0; k < 27u; k++) {
+         uint32_t p = key_place(k), b = (uint32_t)key_black(k), on = 0, can = 0, e;
+         if (l == LAYER_FX && b) {                       /* ((2.0, D 1A) the black keys as GLO's: sounding lit) */
+-            on = p < NTRK && glo_sounding(p);
++            on = p < TRACK_KEY_COUNT && glo_sounding(track_key_origin() + p);
+         } else if (l == LAYER_FX) {                     /* effects breathe, held lit, a too-long REPEAT dark */
+             e = perf_key(k);
+             can = e < PF_N && ((ok >> e) & 1u);
+             on = can && ((held >> e) & 1u);
+         } else if (l == LAYER_GLO) {                    /* sounding lit; SOLO held lit, the others, C4, F4 breathe; */
+-            e = glo_white(k);                           /* (Skiff) F4 FILL too */
+-            on = b ? p < NTRK && glo_sounding(p) : (e < NTRK && ((lys.solo >> k) & 1u)) || (e == GW_FILL && seq_fill);
++            e = glo_white(k, track_key_origin());                           /* (Skiff) F4 FILL too */
++            on = b ? p < TRACK_KEY_COUNT && glo_sounding(track_key_origin() + p) : (e < NTRK && ((lys.solo >> k) & 1u)) || (e == GW_FILL && seq_fill);
+             can = !b && (e < NTRK || e == GW_ALL || e == GW_FILL || (e == GW_TAP && !song.g[G_CLOCK]));
+         } else if (l == LAYER_SCL) {                    /* the root lit, the scale's notes breathe */
+             e = (k + 5u + 12u - root) % 12u;
+@@ -830,7 +830,8 @@
+             on = (b && p < NLANE && drum_track(TSEL) && p == ui.lane) || (!b && p == TL_EUCLID && eu.on);   /* lit,
+                                                          * the other lanes breathe ((1.3) EUCLID open: lit) */
+             can = b ? p < NLANE && drum_track(TSEL) : tl_cell(TSEL, p);
+-        } else if (l == LAYER_PERF && b && p < NTRK) {  /* (Skiff) a track sounding lit; a muted one, a staged one */
++        } else if (l == LAYER_PERF && b && p < TRACK_KEY_COUNT) {  /* (Skiff) a track sounding lit; a muted one, a staged one */
++            p += track_key_origin();
+             on = !trk[p].p[P_MUTE] && !mute_arm[p] && !trk_cut(p);   /* breathe ((2.0) a hold cutting too) */
+             can = 1;
+         } else if (l == LAYER_PERF && !b && p < BANK_SLOTS && perf_scenes()) {   /* (Skiff) the scene recalled or */
+@@ -865,7 +866,7 @@
+     ICON_X_VINYL};
+ static const char W_NOTE[16] = {'F', 'G', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'A', 'B', 'C', 'D', 'E', 'F', 'G'};
+ static const char B_NOTE[] = {'F', 'G', 'A', 'C', 'D', 'F'};   /* black keys 1..6: F# G# A# C# D# F# (the MUTEs) */
+-_Static_assert(sizeof B_NOTE >= NTRK, "a black key's name for every track");
++_Static_assert(sizeof B_NOTE == TRACK_KEY_COUNT, "a black key's name for every track");
+ #define LC_X(c) (6 + 58 * (int32_t)(c))                 /* cell column c: 54 px wide, 4 px apart */
+ #define LC_W 54
+ #define LC_H 42                                          /* the big cells: rows at y 4 and 50 */
+@@ -947,11 +948,11 @@
+ #define L6_X(c) (4 + 39 * (int32_t)(c))
+ #define L6_W 36
+ #define L6_WIDE (2 * L6_W + 3)
+-static void l6_solo(uint32_t k, uint32_t st)
++static void l6_solo(uint32_t k, uint32_t t, uint32_t st)
+ {
+     int32_t x = L6_X(k), y = 4, b[4], j;
+     uint16_t ink, fill = lc_fill(st, &ink), idle = fill == T_RAISE;
+-    uint32_t id = trk_icon(k, 0), p;
++    uint32_t id = trk_icon(t, 0), p;
+     char n[2] = {'?', 0};
+     for (p = 0; p < sizeof GLO_W; p++)                   /* (its key: GLO_W's) */
+         if (GLO_W[p] == k)
+@@ -977,13 +978,13 @@
+     GFX_HOOK_ALIGN(x, 0, x + L6_WIDE, 0, AL_H, "six-track GLO cell word centred across");
+     cv_text_in(x, y + 19, L6_WIDE, &AF_M, word, ink, fill);
+ }
+-static void l6_mute(uint32_t k, uint32_t st, uint32_t icon)   /* (Skiff U2, R10) icon: GLO's MUTE (latched), FX's
++static void l6_mute(uint32_t k, uint32_t t, uint32_t st, uint32_t icon)   /* (Skiff U2, R10) icon: GLO's MUTE (latched), FX's
+                                                                 * CUT while held: the gate, alone (as FX's white keys'
+                                                                 * effects: no room for it beside the note's name) */
+ {
+     int32_t x = L6_X(k), y = LM_Y, b[4], cut = icon != ICON_MUTE;
+     uint16_t ink, fill = lc_fill(st, &ink), idle = fill == T_RAISE;
+-    char n[3], d[2] = {(char)('1' + k), 0};
++    char n[3], d[2] = {(char)('1' + t), 0};
+     bnote(n, k);
+     fill = lc_box(x, y, L6_W, LM_H, fill);
+     GFX_HOOK_ALIGN(0, y, 0, y + LM_H, AL_V, "layer key cell icon / name centred up/down");
+@@ -998,7 +999,7 @@
+     icon_lint_ink = 0;
+     text_ink(&AF_M, d, b);
+     GFX_HOOK_ALIGN(0, y, 0, y + LM_H, AL_V, "layer key cell icon / name centred up/down");
+-    cv_text_on(x + 34 - b[2], y + CAP_IN(M, LM_H), &AF_M, d, idle ? T_TRK(k) : ink, fill);
++    cv_text_on(x + 34 - b[2], y + CAP_IN(M, LM_H), &AF_M, d, idle ? T_TRK(t) : ink, fill);
+ }
+ 
+ static void layer_fx(void)
+@@ -1014,15 +1015,18 @@
+         lcell(LF_X(e % LF_ROW), e < LF_ROW ? 4 : 50, LC_H, n, PF_ICON[e], e < 3u ? PF_DIV[e] : 0, st);
+     }
+     lc_w = LC_W;
+-    for (e = 0; e < NTRK; e++)                          /* ((2.0, D 1A) the black keys 1..6 as GLO's: MUTE, a hold */
+-        l6_mute(e, trk[e].p[P_MUTE] || trk_cut(e) ? LS_MUTE : LS_OFF, ICON_MUTE);   /* cutting) */
++    for (e = 0; e < TRACK_KEY_COUNT; e++) {
++        uint32_t t = track_key_origin() + e;
++        l6_mute(e, t, trk[t].p[P_MUTE] || trk_cut(t) ? LS_MUTE : LS_OFF, ICON_MUTE);
++    }
+ }
+ static void layer_glo(void)
+ {
+     uint32_t e;
+-    for (e = 0; e < NTRK; e++) {                        /* (Skiff phase 6) SOLO 1..6 while held: F G A B C D (GLO_W); */
+-        l6_solo(e, (perf_solo >> e) & 1u ? LS_HELD : LS_OFF);   /* MUTE 1..6, latched: F# G# A# C# D# F# ((2.0) */
+-        l6_mute(e, trk[e].p[P_MUTE] || trk_cut(e) ? LS_MUTE : LS_OFF, ICON_MUTE);   /* a hold cutting too) */
++    for (e = 0; e < TRACK_KEY_COUNT; e++) {
++        uint32_t t = track_key_origin() + e;
++        l6_solo(e, t, (perf_solo >> t) & 1u ? LS_HELD : LS_OFF);
++        l6_mute(e, t, trk[t].p[P_MUTE] || trk_cut(t) ? LS_MUTE : LS_OFF, ICON_MUTE);
+     }
+     l6_wide(0, "E", ICON_MUTE, "ALL", LS_OFF);          /* (unmute all) */
+     l6_wide(1, "F", ICON_DRUM, "FILL", seq_fill ? LS_HELD : LS_OFF);
+@@ -1089,7 +1093,7 @@
+         cv_rect(0, 0, 240, H_GRAPH + (int32_t)foot_less(), T_BG);
+         cv_bg = T_BG;
+     }
+-    for (pos = 0, k = 0; k < NTRK; pos++, k++) {        /* ((Skiff U3, N1) every track) */
++    for (pos = 0, k = track_key_origin(); pos < TRACK_KEY_COUNT; pos++, k++) {
+         int32_t y = PR_Y(pos), ty = y + (PR_H - PR_TH) / 2;
+         int band = k == song.sel % NTRK, cb = band && blocks, muted = trk[k].p[P_MUTE] != 0;
+         uint16_t col = T_TRK(k), g = cb ? col : band ? T_RAISE : g0;
+@@ -1123,16 +1127,16 @@
+             cv_text_in(PR_X(16), ty + CAP_IN(S, PR_TH), PR_W, &AF_S, "M", cb ? T_INK : muted ? T_REC : T_MID, g);
+         }
+     }
+-    GFX_HOOK_ALIGN(0, PR_Y(NTRK), 0, PR_Y(NTRK) + PR_H, AL_V, "perform SCN on its row's middle");
+-    cv_text_on(6, PR_Y(NTRK) + CAP_IN(S, PR_H), &AF_S, "SCN", act ? T_TEXT : T_MID, g0);
++    GFX_HOOK_ALIGN(0, PR_Y(TRACK_KEY_COUNT), 0, PR_Y(TRACK_KEY_COUNT) + PR_H, AL_V, "perform SCN on its row's middle");
++    cv_text_on(6, PR_Y(TRACK_KEY_COUNT) + CAP_IN(S, PR_H), &AF_S, "SCN", act ? T_TEXT : T_MID, g0);
+     for (p = 0; p < BANK_SLOTS; p++) {                 /* (the 16 scenes: bank.c SCENES) */
+         char s[3];
+         uint32_t st = !scene_used(p) ? PC_EMPTY : p != now ? PC_KEPT : stage_pending() ? PC_NEXT : PC_ON;
+         fmt_int(s, (int32_t)p + 1);
+-        perf_cell(PS_X(p), PR_Y(NTRK), s, st, T_TEXT, T_INK, act ? T_TEXT : T_MID, T_DIM, g0, 0);
++        perf_cell(PS_X(p), PR_Y(TRACK_KEY_COUNT), s, st, T_TEXT, T_INK, act ? T_TEXT : T_MID, T_DIM, g0, 0);
+         if (st == PC_KEPT)                             /* (a kept one boxed, as the mockup's: after its number, the
+                                                         * outline over its edge) */
+-            cv_frame(PS_X(p), PR_Y(NTRK) + (PR_H - PR_TH) / 2, PR_W, PR_TH, T_DIM);
++            cv_frame(PS_X(p), PR_Y(TRACK_KEY_COUNT) + (PR_H - PR_TH) / 2, PR_W, PR_TH, T_DIM);
+     }
+ }
+ /* what the PERFORM map shows of every track and the scenes (draw_layer: redrawn when it changes) */
+@@ -1347,10 +1351,10 @@
+     layer_cards(l);
+     if (l == LAYER_FX)
+         sig += (perf_kill ? 0u : perf_held | perf_latched) * 31u + perf_latch_on * 11u + perf_act * 131u + perf_avail() * 7u + (uint32_t)perf_harm_on() * 3u +
+-               glo_mutes() * 7717u + perf_cut * 2803u;   /* ((2.0, D 1A) the black keys: GLO's MUTE) */
++               glo_mutes() * 7717u + perf_cut * 2803u + track_key_origin() * 7919u;   /* ((2.0, D 1A) the black keys: GLO's MUTE) */
+     else if (l == LAYER_GLO)
+         sig += perf_solo * 31u + (uint32_t)song.g[G_CLOCK] * 5u + (uint32_t)seq_fill * 104729u +
+-               glo_mutes() * 131u + trk_top() * 1299709u + (perf_cut | perf_held >> PF_M1) * 2803u;   /* ((2.0) holds) */
++               glo_mutes() * 131u + trk_top() * 1299709u + track_key_origin() * 7919u + (perf_cut | perf_held >> PF_M1) * 2803u;   /* ((2.0) holds) */
+     else if (l == LAYER_SCL)
+         sig += (uint32_t)TSEL->p[P_SCALE] * 31u;
+     else if (l == LAYER_REC)
+--- a/firmware/src/ui_menu.c
++++ b/firmware/src/ui_menu.c
+@@ -339,11 +339,11 @@
+         cv_rrect(MR_X, y, MR_W, h, ux.crypt ? 0 : 6, T_THEME, T_SURF);   /* ((Skiff) no rules between the rows, as the mockup) */
+     if (ux.neon) {                                     /* (Skiff N3) NEON: an arcade's high score table: the rank, slanted,
+                                                         * in the tracks' colours, before the name */
+-        static const char RANK[6][4] = {"1ST", "2ND", "3RD", "4TH", "5TH", "6TH"};
++        static const char RANK[NTRK][4] = {"1ST", "2ND", "3RD", "4TH", "5TH", "6TH", "7TH", "8TH"};
+         const aafont_t *f = large ? &AF_M : &AF_S;
+         GFX_HOOK_ALIGN(0, y, 0, y + h, AL_V, "menu row name centred up/down");
+         cv_fx_on(ny, f, 0);
+-        cv_text_on(MR_LX, ny, f, RANK[k % 6u], sel ? T_INK : T_TRK(k), bg);
++        cv_text_on(MR_LX, ny, f, RANK[k % NTRK], sel ? T_INK : T_TRK(k), bg);
+         cv_fx_off();
+         GFX_HOOK_ALIGN(0, y, 0, y + h, AL_V, "menu row name centred up/down");
+         nx = cv_text_on(MR_LX + text_w(f, "6TH") + cv_fx_w(f) + 6, ny, f, MI_NAME[row], fg, bg) + 4;
+--- a/firmware/src/ui_take.c
++++ b/firmware/src/ui_take.c
+@@ -5,7 +5,7 @@
+ /* (2.0, #25) the NOTES edit copy (ui_input.c): a take on a POLY track playing forward ties each held note on by itself */
+ static void ed_open(step_t *w, const track_t *t, uint32_t len);
+ static int ed_add(step_t *s, uint32_t p, uint32_t tie);
+-static void ed_close(track_t *t, step_t *w, uint32_t len, uint64_t keep);
++static void ed_close(track_t *t, step_t *w, uint32_t len, step_mask_t keep);
+ 
+ /* the hold of the note on in log entry i (pass want, step a): the steps it ties into, a + 1 .. *end - 1 (the
+  * note's end, or the next note on the track: a new note ends the hold, as REC; (2.0) not when own: notes overlap);
+@@ -402,7 +402,7 @@
+             ;
+     }
+     if (own)
+-        ed_close(t, tmp, len, 0);                       /* (folded: TIEs where they can be; it writes steps 1..LEN) */
++        ed_close(t, tmp, len, STEP_MASK_EMPTY);                       /* (folded: TIEs where they can be; it writes steps 1..LEN) */
+     fm1_irq_off();                                      /* the audio ISR must not see half a pattern */
+     memcpy(t->step, tmp, sizeof tmp);                   /* (own: the same 1..LEN again; past LEN: empty) */
+     fm1_irq_on();
+@@ -549,7 +549,7 @@
+         if (motion_replace_track(t, &undo.motion_backup))   /* adds to what is there) */
+             full = 1;
+         if (own) {
+-            ed_close(t, tmp, len, 0);                 /* (folded: TIEs where they can be; at once, the IRQ off) */
++            ed_close(t, tmp, len, STEP_MASK_EMPTY);                 /* (folded: TIEs where they can be; at once, the IRQ off) */
+             t->seq_active = 1;
+         } else {
+             fm1_irq_off();                            /* the audio ISR must not see half a pattern */
+--- a/firmware/src/ui_tools.c
++++ b/firmware/src/ui_tools.c
+@@ -71,21 +71,21 @@
+ }
+ 
+ /* steps 1..len of t that are not empty (a REST); after the action the ones emptied lose their locks */
+-static uint64_t tl_used_of(const step_t *s, uint32_t len)
+-{
+-    uint64_t m = 0;
++static step_mask_t tl_used_of(const step_t *s, uint32_t len)
++{
++    step_mask_t m = STEP_MASK_EMPTY;
+     uint32_t i;
+     for (i = 0; i < len; i++)
+         if (s[i].time != ST_REST)
+-            m |= (uint64_t)1 << i;
++            step_mask_set(&m, i);
+     return m;
+ }
+-static uint64_t tl_used(const track_t *t, uint32_t len) { return tl_used_of(t->step, len); }
+-static void tl_unlock(track_t *t, uint64_t was, uint32_t len)
++static step_mask_t tl_used(const track_t *t, uint32_t len) { return tl_used_of(t->step, len); }
++static void tl_unlock(track_t *t, step_mask_t was, uint32_t len)
+ {
+     uint32_t i;
+     for (i = 0; i < len; i++)
+-        if (((was >> i) & 1u) && t->step[i].time == ST_REST)
++        if (step_mask_has(was, i) && t->step[i].time == ST_REST)
+             (void)motion_clear_locks(t, i);
+ }
+ 
+@@ -101,8 +101,8 @@
+     f = motion_guard();
+     for (j = 0; j < motion.count; j++) {
+         motion_event_t *e = &motion.event[j];
+-        if ((e->place >> 6) == k && (e->place & 63u) < len)
+-            e->place = (uint16_t)(k << 6 | to[e->place & 63u]);
++        if ((MOTION_TRACK(e->place)) == k && (MOTION_STEP(e->place)) < len)
++            e->place = (uint16_t)(MOTION_PLACE(k, to[MOTION_STEP(e->place)]));
+     }
+     motion_unguard(f);
+ }
+@@ -116,7 +116,7 @@
+ {
+     step_t w[NSTEP], r[NSTEP];
+     uint8_t to[NSTEP];
+-    uint64_t own = 0;
++    step_mask_t own = STEP_MASK_EMPTY;
+     uint32_t i, j, k, e, n, x, y, had, f, tk = trk_index(t);
+     ed_open(w, t, len);
+     for (j = 0; j < len; j++) {
+@@ -142,8 +142,8 @@
+                 ed_vals(&r[n], &w[i]);
+             for (j = n + 1u; j <= len - 1u - i && ed_add(&r[j], w[i].note[k], 1); j++)
+                 ;
+-            if (!((own >> i) & 1u)) {
+-                own |= (uint64_t)1 << i;
++            if (!step_mask_has(own, i)) {
++                step_mask_set(&own, i);
+                 to[i] = (uint8_t)n;
+             }
+         }
+@@ -151,27 +151,27 @@
+     motion_restore(t);
+     for (x = 0; x < motion.count; x++) {
+         motion_event_t *a = &motion.event[x];
+-        uint32_t pa = a->place & 63u;
+-        for (y = 0; (a->place >> 6) == tk && pa < len && y < motion.count; y++) {
++        uint32_t pa = MOTION_STEP(a->place);
++        for (y = 0; (MOTION_TRACK(a->place)) == tk && pa < len && y < motion.count; y++) {
+             motion_event_t *b = &motion.event[y];
+-            uint32_t pb = b->place & 63u, oa = (uint32_t)(own >> pa) & 1u, ob = (uint32_t)(own >> pb) & 1u;
+-            if (y != x && (b->place >> 6) == tk && pb < len && pb != pa && to[pb] == to[pa] &&
++            uint32_t pb = MOTION_STEP(b->place), oa = step_mask_has(own, pa), ob = step_mask_has(own, pb);
++            if (y != x && (MOTION_TRACK(b->place)) == tk && pb < len && pb != pa && to[pb] == to[pa] &&
+                 MOTION_ID(b) == MOTION_ID(a) && (ob > oa || (ob == oa && y < x)))
+-                a->place = 511u;
++                a->place = MOTION_PLACE_NONE;
+         }
+     }
+     for (n = 0, x = 0; x < motion.count; x++) {
+         motion_event_t ev = motion.event[x];
+-        if (ev.place == 511u)
++        if (ev.place == MOTION_PLACE_NONE)
+             continue;
+-        if ((ev.place >> 6) == tk && (ev.place & 63u) < len)
+-            ev.place = (uint16_t)(tk << 6 | to[ev.place & 63u]);
++        if ((MOTION_TRACK(ev.place)) == tk && (MOTION_STEP(ev.place)) < len)
++            ev.place = (uint16_t)(MOTION_PLACE(tk, to[MOTION_STEP(ev.place)]));
+         motion.event[n++] = ev;
+     }
+     memset(motion.event + n, 0, (MOTION_MAX - n) * sizeof motion.event[0]);
+     motion.count = (uint8_t)n;
+     motion_unguard(f);
+-    ed_close(t, r, len, 0);
++    ed_close(t, r, len, STEP_MASK_EMPTY);
+ }
+ 
+ /* REVERSE: the mirror order; a note's ties (after it) would come before it, so the note goes first again. (2.0) With a
+@@ -502,7 +502,7 @@
+  * steps lose their locks when it is applied. The values stay for the next one (until the power goes). The track's steps
+  * as it opened are its own copy (eu_from; the undo copy is the next load's, a MIDI Program Change or the editor's on
+  * another track meanwhile), and it stays on the track it opened on */
+-static struct { uint8_t on, hits, steps, rot, trk; } eu;
++static struct { uint8_t on, rot, trk; uint16_t hits, steps; } eu;
+ static step_t eu_from[NSTEP] __attribute__((section(".pool")));   /* the steps as EUCLID opened (the pool: .bss is tight) */
+ static track_t *eu_track(void) { return &trk[eu.trk % NTRK]; }
+ static int eu_hit(uint32_t i)                           /* step i (0..) of the cycle repeated, turned by rot */
+@@ -553,7 +553,7 @@
+ {
+     uint32_t len = tl_len(t);
+     if (!eu.steps || eu.steps > len)
+-        eu.steps = (uint8_t)(len < 16u ? len : 16u);
++        eu.steps = (uint16_t)(len < 16u ? len : 16u);
+     if (eu.hits > eu.steps)
+         eu.hits = eu.steps;
+     eu.rot = (uint8_t)(eu.rot % eu.steps);
+@@ -587,9 +587,9 @@
+ {
+     t = eu_track();
+     if (k == 0u)
+-        eu.hits = (uint8_t)clamp((int32_t)eu.hits + s, 0, eu.steps);
++        eu.hits = (uint16_t)clamp((int32_t)eu.hits + s, 0, eu.steps);
+     else if (k == 1u)
+-        eu.steps = (uint8_t)clamp((int32_t)eu.steps + s, 1, (int32_t)tl_len(t));
++        eu.steps = (uint16_t)clamp((int32_t)eu.steps + s, 1, (int32_t)tl_len(t));
+     else if (k == 2u)
+         eu.rot = (uint8_t)(((int32_t)eu.rot + s % (int32_t)eu.steps + (int32_t)eu.steps) % (int32_t)eu.steps);
+     else
+@@ -626,7 +626,7 @@
+  * NUDGE, VEL) with their automation and locks (a copy each; what was stored past LEN where the copy goes is replaced).
+  * A note tied over the loop's end ties into the copy as it tied into step 1. E5 HALF: LEN / 2 (rounded down), the steps
+  * of the second half cleared with their automation and locks (a note tied into it ends at the new LEN). Both one undo
+- * (SAVE held: the steps, LEN and the automation back). DOUBLE at 64 steps and HALF at 1 do nothing (said why); DOUBLE
++ * (SAVE held: the steps, LEN and the automation back). DOUBLE at 256 steps and HALF at 1 do nothing (said why); DOUBLE
+  * with too few of the 128 records left for the copies: AUTOMATION FULL, nothing done */
+ /* *m = track t's records with steps lo..hi-1 dropped, those of steps 0..cn-1 copied by `by` steps (cn 0: none): the
+  * track's records as they will be ((2.0) the caller's, on the stack: was 260 B of the pool); 0 = they do not fit the
+@@ -639,15 +639,15 @@
+     m->on = motion.on & (uint8_t)(1u << k);
+     for (i = 0; i < motion.count; i++) {
+         const motion_event_t *e = &motion.event[i];
+-        uint32_t s = e->place & 63u;
+-        if ((e->place >> 6) != k || (s >= lo && s < hi))
++        uint32_t s = MOTION_STEP(e->place);
++        if ((MOTION_TRACK(e->place)) != k || (s >= lo && s < hi))
+             continue;
+         if (n < MOTION_MAX) m->event[n] = *e;
+         n++;
+         if (s < cn) {
+             if (n < MOTION_MAX) {
+                 m->event[n] = *e;
+-                m->event[n].place = (uint16_t)(k << 6 | (s + by));   /* ((Skiff) six tracks: 9 bits) */
++                m->event[n].place = (uint16_t)(MOTION_PLACE(k, (s + by)));
+             }
+             n++;
+         }
+@@ -664,7 +664,7 @@
+ {
+     motion_store_t m;
+     if (p == TL_DOUBLE && len >= NSTEP) {
+-        ui_message("64 STEPS: NO ROOM");
++        ui_message("256 STEPS: NO ROOM");
+         return 0;
+     }
+     if (p == TL_HALF && len < 2u) {
+@@ -706,7 +706,7 @@
+ {
+     static char b[24];
+     uint32_t len = tl_len(t), i, n = 0;
+-    uint64_t was = tl_used(t, len);
++    step_mask_t was = tl_used(t, len);
+     int drum = drum_track(t);
+     const char *msg = 0;
+     l %= NLANE;
+--- a/web/emu/felucca_web.c
++++ b/web/emu/felucca_web.c
+@@ -32,7 +32,7 @@
+ #define FELUCCA_VERSION "WEB"
+ #endif
+ 
+-static uint8_t nor[0x100000];            /* the SPI NOR (erased: 0xFF) */
++static uint8_t nor[0x100000 + 68u * 0x1000u];            /* the SPI NOR (erased: 0xFF) */
+ #define SMP_USER_XIP(k) ((const uint8_t *)nor + SMP_USER_BASE + (k) * SMP_USER_SIZE)   /* eng_sample.c */
+ #define main hostsim_main
+ #include "../../tests/hostsim.c"

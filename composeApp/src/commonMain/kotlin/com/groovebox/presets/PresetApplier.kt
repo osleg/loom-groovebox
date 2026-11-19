@@ -64,7 +64,15 @@ object PresetApplier {
                 parameters = newParameters,
                 filterMode = if (preset.engine == PresetEngine.SUBTRACTIVE)
                     (preset.filterMode ?: t.filterMode).coerceIn(0, 2) else t.filterMode,
-                activeWavetableName = wavetableName
+                activeWavetableName = wavetableName,
+                fm1KnobBindings = preset.fm1KnobBindings?.let { bindings ->
+                    List(4) { index -> bindings.getOrNull(index)?.toTrackBinding()
+                        ?.takeIf { it.isValid() } }
+                },
+                fm1StepKnobBindings = preset.fm1StepKnobBindings?.let { bindings ->
+                    List(4) { index -> bindings.getOrNull(index)?.toTrackBinding()
+                        ?.takeIf { it.isValid() } }
+                }
             )
         }
         onStateChange(state.copy(tracks = newTracks))

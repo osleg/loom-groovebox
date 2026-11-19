@@ -24,6 +24,16 @@ actual class MidiManager(
 
     private val registry = mutableMapOf<String, DeviceEntry>()
     private val pendingMessages = mutableListOf<ByteArray>()
+    private val main = Handler(Looper.getMainLooper())
+    private val deviceCallback = object : android.media.midi.MidiManager.DeviceCallback() {
+        override fun onDeviceAdded(device: android.media.midi.MidiDeviceInfo) {
+            connectToDevice(device)
+        }
+
+        override fun onDeviceRemoved(device: android.media.midi.MidiDeviceInfo) {
+            removeDevice(device)
+        }
+    }
     // A selected CAFA endpoint belongs exclusively to its framed-session transport.
     // Generic LED broadcasts, clock, queued traffic and raw MIDI must not share it.
     @Volatile private var cafaReservedId: Int? = null
@@ -31,6 +41,7 @@ actual class MidiManager(
 
     @Synchronized
     fun reserveForCafa(deviceId: Int?) {
+        if (closed) return
         val old = cafaReservedId
         cafaReservedId = deviceId
         registry.values.firstOrNull { it.info.id == deviceId }?.let { removeDevice(it.info) }
@@ -74,15 +85,7 @@ actual class MidiManager(
     init {
         MidiConfigStore.load()
         connectExistingDevices()
-        midiManager.registerDeviceCallback(object : android.media.midi.MidiManager.DeviceCallback() {
-            override fun onDeviceAdded(device: android.media.midi.MidiDeviceInfo) {
-                connectToDevice(device)
-            }
-
-            override fun onDeviceRemoved(device: android.media.midi.MidiDeviceInfo) {
-                removeDevice(device)
-            }
-        }, Handler(Looper.getMainLooper()))
+        midiManager.registerDeviceCallback(deviceCallback, main)
     }
 
     private fun connectExistingDevices() {
@@ -114,7 +117,7 @@ actual class MidiManager(
         }
         midiManager.openDevice(info, { device ->
             if (device == null) {
-                logToUi("Failed to open: ${deviceDisplayName(info)}")
+                if (!closed) logToUi("Failed to open: ${deviceDisplayName(info)}")
                 return@openDevice
             }
             if (closed || info.id == cafaReservedId) { device.close(); return@openDevice }
@@ -154,6 +157,12 @@ actual class MidiManager(
 
             val entry = DeviceEntry(id, info, device, incoming, outgoing)
             synchronized(this@MidiManager) {
+                if (closed || info.id == cafaReservedId || registry.containsKey(id)) {
+                    incoming.forEach { runCatching { it.close() } }
+                    outgoing.forEach { runCatching { it.close() } }
+                    device.close()
+                    return@openDevice
+                }
                 registry[id] = entry
                 publishDevices()
             }
@@ -166,7 +175,7 @@ actual class MidiManager(
             synchronized(this@MidiManager) {
                 flushPending(outgoing)
             }
-        }, Handler(Looper.getMainLooper()))
+        }, main)
     }
 
     @Synchronized
@@ -203,7 +212,7 @@ actual class MidiManager(
     }
 
     private fun handleIncoming(deviceId: String, message: ByteArray) {
-        if (message.isEmpty()) return
+        if (closed || message.isEmpty()) return
         val config = MidiConfigStore.configFor(deviceId)
         if (!config.enabled || config.ignoreIncoming) return
         if (config.receiveChannel in 1..16 &&
@@ -258,6 +267,7 @@ actual class MidiManager(
 
     @Synchronized
     actual fun sendMidi(data: ByteArray) {
+        if (closed) return
         // Cache before sending so a fast echo cannot beat the cache write.
         synchronized(recentSentMessages) {
             recentSentMessages.add(SentMessage(data.copyOf(), System.currentTimeMillis()))
@@ -274,6 +284,7 @@ actual class MidiManager(
 
     @Synchronized
     actual fun sendMidiTo(deviceId: String?, data: ByteArray) {
+        if (closed) return
         if (deviceId == null) {
             sendMidi(data)
             return
@@ -287,6 +298,7 @@ actual class MidiManager(
 
     @Synchronized
     actual fun refreshDevices() {
+        if (closed) return
         val present = midiManager.devices.map { stableId(it) }.toSet()
         registry.keys.toList().filter { it !in present }.forEach { stale ->
             registry[stale]?.let { entry ->
@@ -303,7 +315,10 @@ actual class MidiManager(
 
     @Synchronized
     actual fun close() {
+        if (closed) return
         closed = true
+        runCatching { midiManager.unregisterDeviceCallback(deviceCallback) }
+        pendingMessages.clear()
         registry.values.forEach { entry ->
             runCatching { entry.incoming.forEach { it.close() } }
             runCatching { entry.outgoing.forEach { it.close() } }

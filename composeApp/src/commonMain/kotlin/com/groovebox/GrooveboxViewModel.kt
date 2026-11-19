@@ -13,6 +13,7 @@ class GrooveboxViewModel(
     private val nativeLib: NativeLib,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.Main + Job())
 ) {
+    private val recordedStepGuards = mutableMapOf<Pair<Int, Int>, Boolean>()
     val midiRouter = MidiRouter(nativeLib) { command ->
         handleMidiCommand(command)
     }
@@ -133,6 +134,7 @@ class GrooveboxViewModel(
     }
 
     fun sanitizeAndSetState(loadedState: GrooveboxState) {
+        recordedStepGuards.clear()
         state = sanitizeGrooveboxState(loadedState)
         syncWithNative() // Ensure native engine is in sync after loading
     }
@@ -161,76 +163,62 @@ class GrooveboxViewModel(
                 else dsteps
             }
             state = state.copy(tracks = state.tracks.mapIndexed { idx, t -> if (idx == trackIdx) t.copy(drumSteps = newDrumSteps) else t })
-            nativeLib.setStep(trackIdx, stepIdx, newActive, finalNotes.toIntArray(), currentStep.velocity, currentStep.ratchet, currentStep.punch, currentStep.probability, currentStep.gate, currentStep.isSkipped)
+            nativeLib.setStep(trackIdx, stepIdx, newActive, finalNotes.toIntArray(), currentStep.velocity, currentStep.ratchet, currentStep.punch, currentStep.probability, currentStep.gate, currentStep.isSkipped, currentStep.subStepOffset, currentStep.noteOffsets.toFloatArray(), currentStep.noteVelocities.toFloatArray(), ((currentStep.noteGates as Any?) as? List<Float> ?: emptyList()).toFloatArray(), currentStep.parameterLocks.keys.toIntArray(), currentStep.parameterLocks.values.toFloatArray())
         } else {
             val rootNote = 60 // Default note if empty
             val finalNotes = if (newActive && currentStep.notes.isEmpty()) listOf(rootNote) else currentStep.notes
             val newSteps = track.steps.mapIndexed { si, s -> if (si == stepIdx) s.copy(active = newActive, notes = finalNotes) else s }
             state = state.copy(tracks = state.tracks.mapIndexed { idx, t -> if (idx == trackIdx) t.copy(steps = newSteps) else t })
-            nativeLib.setStep(trackIdx, stepIdx, newActive, finalNotes.toIntArray(), currentStep.velocity, currentStep.ratchet, currentStep.punch, currentStep.probability, currentStep.gate, currentStep.isSkipped)
+            nativeLib.setStep(trackIdx, stepIdx, newActive, finalNotes.toIntArray(), currentStep.velocity, currentStep.ratchet, currentStep.punch, currentStep.probability, currentStep.gate, currentStep.isSkipped, currentStep.subStepOffset, currentStep.noteOffsets.toFloatArray(), currentStep.noteVelocities.toFloatArray(), ((currentStep.noteGates as Any?) as? List<Float> ?: emptyList()).toFloatArray(), currentStep.parameterLocks.keys.toIntArray(), currentStep.parameterLocks.values.toFloatArray())
         }
     }
 
 
-    fun pullRecordedSteps(trackIdx: Int) {
-        if (trackIdx !in state.tracks.indices) return
-        val track = state.tracks[trackIdx]
-        
-        val isSamplerChops = track.engineType == EngineType.SAMPLER && (track.parameters[320] ?: 0f) > 0.6f
-        val isMultiTrack = track.engineType == EngineType.FM_DRUM || track.engineType == EngineType.ANALOG_DRUM || isSamplerChops
-        
-        val patternLen = track.patternLength
-        var changed = false
-
-        if (isMultiTrack) {
-            val drumIdx = track.selectedFmDrumInstrument
-            val updatedSteps = track.drumSteps[drumIdx].mapIndexed { stepIdx, s ->
-                if (stepIdx < patternLen) {
-                    val isActive = nativeLib.getStepActive(trackIdx, stepIdx, drumIdx)
-                    if (isActive && !s.active) {
-                        changed = true
-                        val notes = nativeLib.getStepNotes(trackIdx, stepIdx, drumIdx)
-                        val vel = nativeLib.getStepVelocity(trackIdx, stepIdx, drumIdx)
-                        val sub = nativeLib.getStepSubStep(trackIdx, stepIdx, drumIdx)
-                        s.copy(active = true, notes = notes.toList(), velocity = vel, subStepOffset = sub)
-                    } else if (!isActive && s.active) {
-                        changed = true
-                        s.copy(active = false, notes = emptyList())
-                    } else s
-                } else s
+    /** Apply native recording changes to the latest state, including unselected lanes. */
+    fun drainRecordedSteps() {
+        val changes = nativeLib.drainRecordedSteps()
+        if (changes.isEmpty()) return
+        var tracks = state.tracks
+        var cursor = 0
+        while (cursor + 6 <= changes.size) {
+            val trackIndex = changes[cursor++].toInt()
+            val lane = changes[cursor++].toInt()
+            val stepIndex = changes[cursor++].toInt()
+            val active = changes[cursor++] != 0f
+            val gate = changes[cursor++]
+            val noteCount = changes[cursor++].toInt()
+            if (noteCount < 0 || noteCount > (changes.size - cursor) / 4) break
+            val notes = ArrayList<Int>(noteCount)
+            val velocities = ArrayList<Float>(noteCount)
+            val offsets = ArrayList<Float>(noteCount)
+            val gates = ArrayList<Float>(noteCount)
+            repeat(noteCount) {
+                notes += changes[cursor++].toInt()
+                velocities += changes[cursor++]
+                offsets += changes[cursor++]
+                gates += changes[cursor++]
             }
-            if (changed) {
-                val newDrumSteps = track.drumSteps.mapIndexed { di, dsteps ->
-                    if (di == drumIdx) updatedSteps else dsteps
-                }
-                state = state.copy(tracks = state.tracks.mapIndexed { idx, t ->
-                    if (idx == trackIdx) t.copy(drumSteps = newDrumSteps) else t
-                })
-            }
-        } else {
-            val steps = track.steps
-            val updatedSteps = steps.mapIndexed { stepIdx, s ->
-                if (stepIdx < patternLen) {
-                    val isActive = nativeLib.getStepActive(trackIdx, stepIdx)
-                    if (s.active != isActive) {
-                        changed = true
-                        if (isActive) {
-                            val notes = nativeLib.getStepNotes(trackIdx, stepIdx)
-                            val vel = nativeLib.getStepVelocity(trackIdx, stepIdx)
-                            val sub = nativeLib.getStepSubStep(trackIdx, stepIdx)
-                            s.copy(active = true, notes = notes.toList(), velocity = vel, subStepOffset = sub)
-                        } else {
-                            s.copy(active = false, notes = emptyList())
-                        }
-                    } else s
-                } else s
-            }
-            if (changed) {
-                state = state.copy(tracks = state.tracks.mapIndexed { idx, tr -> 
-                    if (idx == trackIdx) tr.copy(steps = updatedSteps) else tr 
-                })
-            }
+            val track = tracks.getOrNull(trackIndex) ?: continue
+            val steps = (if (lane == -1) track.steps else track.drumSteps.getOrNull(lane)) ?: continue
+            val old = steps.getOrNull(stepIndex) ?: continue
+            val updated = old.copy(
+                active = active,
+                notes = notes,
+                velocity = velocities.firstOrNull() ?: old.velocity,
+                gate = gate,
+                subStepOffset = offsets.firstOrNull() ?: old.subStepOffset,
+                noteOffsets = offsets,
+                noteVelocities = velocities,
+                noteGates = gates.map { if (it < 0.01f) gate else it }
+            )
+            if (updated == old) continue
+            if (lane == -1) recordedStepGuards[trackIndex to stepIndex] = active
+            val updatedSteps = steps.toMutableList().also { it[stepIndex] = updated }
+            val updatedTrack = if (lane == -1) track.copy(steps = updatedSteps)
+                else track.copy(drumSteps = track.drumSteps.toMutableList().also { it[lane] = updatedSteps })
+            tracks = tracks.toMutableList().also { it[trackIndex] = updatedTrack }
         }
+        if (tracks !== state.tracks) state = state.copy(tracks = tracks)
     }
 
     fun pullTransportState() {
@@ -264,6 +252,7 @@ class GrooveboxViewModel(
             lastUiActivity.elapsedNow() < kotlin.time.Duration.parse("1s")
 
     fun pollEngineState() {
+        drainRecordedSteps()
         pullTransportState()
         // MIDI clock output must keep ticking even when nothing visible changed.
         syncMidiClock()
@@ -310,16 +299,22 @@ class GrooveboxViewModel(
         }
         
         // Pull active step bits from native for the focused track (Wait-free)
-        val activeBits = nativeLib.getAllStepActiveStates(focusedTrackIdx)
+        val activeBits = if (state.isRecording) BooleanArray(0) else nativeLib.getAllStepActiveStates(focusedTrackIdx)
         var stepsChanged = false
         activeBits.forEachIndexed { si, active ->
-            if (si < track.steps.size && track.steps[si].active != active) {
+            val key = focusedTrackIdx to si
+            if (recordedStepGuards[key] == active) recordedStepGuards.remove(key)
+            if (key !in recordedStepGuards && si < track.steps.size && track.steps[si].active != active) {
                 stepsChanged = true
             }
         }
         
         // Playhead sync (native is the source of truth while playing)
-        val newStep = if (state.isPlaying) nativeLib.getCurrentStep(focusedTrackIdx, -1) else 0
+        val drumLane = if (track.engineType == EngineType.FM_DRUM ||
+            track.engineType == EngineType.ANALOG_DRUM ||
+            (track.engineType == EngineType.SAMPLER && (track.parameters[320] ?: 0f) > 0.6f))
+            track.selectedFmDrumInstrument else -1
+        val newStep = if (state.isPlaying) nativeLib.getCurrentStep(focusedTrackIdx, drumLane) else 0
         val stepChanged = newStep != state.currentStep
         // Quantise the CPU readout so a noisy meter cannot recompose the UI on
         // every poll while nothing is happening.
@@ -346,7 +341,7 @@ class GrooveboxViewModel(
                             isAudiblyActive = isNowActive,
                             steps = if (stepsChanged) {
                                 t.steps.mapIndexed { si, step ->
-                                    if (si < activeBits.size) step.copy(active = activeBits[si]) else step
+                                    if (si < activeBits.size && (focusedTrackIdx to si) !in recordedStepGuards) step.copy(active = activeBits[si]) else step
                                 }
                             } else t.steps
                         )
@@ -446,6 +441,11 @@ class GrooveboxViewModel(
     @Volatile
     private var midiPumpStarted = false
 
+    @Volatile
+    private var midiClosed = false
+    private val midiPumpLock = Any()
+    private var midiPumpThread: Thread? = null
+
     /** 24 PPQN generator + transport messages (Phase 5). */
     private val midiClockOut = MidiClockOut()
 
@@ -455,6 +455,7 @@ class GrooveboxViewModel(
      * so a tempo knob move or transport change is picked up immediately.
      */
     fun syncMidiClock() {
+        if (midiClosed) return
         val settings = MidiConfigStore.current()
         val hasOutput = midiManagerRef?.devices?.value?.any { it.isOutput } == true
         midiClockOut.sync(
@@ -466,19 +467,22 @@ class GrooveboxViewModel(
     }
 
     fun attachMidiManager(manager: com.groovebox.midi.MidiManager) {
+        if (midiClosed) return
         midiManagerRef = manager
         midiClockOut.attachSender(manager::sendMidi)
         syncMidiClock()
         if (midiPumpStarted) return
         midiPumpStarted = true
-        Thread({
-            while (true) {
+        midiPumpThread = Thread({
+            while (!midiClosed) {
                 // With no MIDI output device attached there is nothing to send,
                 // so don't burn a JNI call 200 times a second on it.
                 val hasOutput = midiManagerRef?.devices?.value?.any { it.isOutput } == true
                 if (hasOutput) {
                     try {
-                        pumpMidiOut()
+                        synchronized(midiPumpLock) {
+                            if (!midiClosed) pumpMidiOut()
+                        }
                     } catch (e: Exception) {
                         // Never let output routing take down the app.
                     }
@@ -493,6 +497,17 @@ class GrooveboxViewModel(
             isDaemon = true
             start()
         }
+    }
+
+    /** Stop MIDI work before the runtime releases its manager and native engine. */
+    fun closeMidi() {
+        if (midiClosed) return
+        midiClosed = true
+        midiClockOut.detachSender()
+        midiClockOut.close()
+        midiPumpThread?.interrupt()
+        synchronized(midiPumpLock) { midiManagerRef = null }
+        midiPumpThread = null
     }
 
     private fun pumpMidiOut() {
@@ -649,14 +664,14 @@ class GrooveboxViewModel(
                     }
                     val finalNotes = if (newActive && step.notes.isEmpty()) listOf(60) else step.notes
                     state = state.copy(tracks = state.tracks.mapIndexed { idx, t -> if (idx == trackIdx) t.copy(drumSteps = newDrumSteps) else t })
-                    nativeLib.setStep(trackIdx, stepIdx, newActive, finalNotes.toIntArray(), step.velocity, step.ratchet, step.punch, step.probability, step.gate, step.isSkipped)
+                    nativeLib.setStep(trackIdx, stepIdx, newActive, finalNotes.toIntArray(), step.velocity, step.ratchet, step.punch, step.probability, step.gate, step.isSkipped, step.subStepOffset, step.noteOffsets.toFloatArray(), step.noteVelocities.toFloatArray(), ((step.noteGates as Any?) as? List<Float> ?: emptyList()).toFloatArray(), step.parameterLocks.keys.toIntArray(), step.parameterLocks.values.toFloatArray())
                 } else {
                     val step = track.steps[stepIdx]
                     val newActive = !step.active
                     val finalNotes = if (newActive && step.notes.isEmpty()) listOf(60) else step.notes
                     val newSteps = track.steps.mapIndexed { si, s -> if (si == stepIdx) s.copy(active = newActive, notes = finalNotes) else s }
                     state = state.copy(tracks = state.tracks.mapIndexed { idx, t -> if (idx == trackIdx) t.copy(steps = newSteps) else t })
-                    nativeLib.setStep(trackIdx, stepIdx, newActive, finalNotes.toIntArray(), step.velocity, step.ratchet, step.punch, step.probability, step.gate, step.isSkipped)
+                    nativeLib.setStep(trackIdx, stepIdx, newActive, finalNotes.toIntArray(), step.velocity, step.ratchet, step.punch, step.probability, step.gate, step.isSkipped, step.subStepOffset, step.noteOffsets.toFloatArray(), step.noteVelocities.toFloatArray(), ((step.noteGates as Any?) as? List<Float> ?: emptyList()).toFloatArray(), step.parameterLocks.keys.toIntArray(), step.parameterLocks.values.toFloatArray())
                 }
             }
         }

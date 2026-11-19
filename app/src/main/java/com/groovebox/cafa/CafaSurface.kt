@@ -2,6 +2,22 @@
 package com.groovebox.cafa
 
 import com.groovebox.*
+import org.fm1.companion.control.ParameterBanks
+import org.fm1.companion.legacy.LegacySurface
+import org.fm1.companion.legacy.Protocol
+import org.fm1.companion.instrument.OperationDispatcher
+import org.fm1.companion.instrument.OperationResult
+import org.fm1.companion.instrument.ObjectRef
+import org.fm1.companion.instrument.ResultCode
+import org.fm1.companion.transport.TransportControls
+import org.fm1.companion.transport.TransportIntent
+import org.fm1.companion.parts.PartsControls
+import org.fm1.companion.parts.PartsIntent
+import org.fm1.companion.parts.PartsState
+import org.fm1.companion.sequence.SequenceIntent
+import org.fm1.companion.sequence.SequenceScan
+import org.fm1.companion.sequence.SequenceValueFormat
+import org.fm1.companion.sequence.SkiffSequenceEditor
 import kotlin.math.roundToInt
 
 /** FM1 intentions mutate the real Loom state AND real Loom engine, never a second synth. */
@@ -10,9 +26,9 @@ class CafaSurface(
     private val write: (GrooveboxState) -> Unit,
     private val engine: Engine,
     private val selectTrack: (Int) -> Unit,
-    private val save: () -> Unit,
+    private val save: () -> Boolean,
     private val notice: (String) -> Unit
-) {
+) : LegacySurface {
     interface Engine {
         fun selectEngine(track: Int, type: EngineType) {}
         fun noteOn(track: Int, note: Int)
@@ -23,6 +39,7 @@ class CafaSurface(
         fun volume(track: Int, value: Float)
         fun pan(track: Int, value: Float)
         fun mute(track: Int, value: Boolean)
+        fun solo(track: Int, value: Boolean)
         fun tempo(value: Float)
         fun length(track: Int, value: Int)
         fun step(track: Int, index: Int, value: StepState)
@@ -33,6 +50,13 @@ class CafaSurface(
         fun swing(value: Float)
         fun humanize(track: Int, value: Float)
         fun lane(track: Int, value: Int)
+        fun chainEnabled(track: Int, enabled: Boolean) {}
+        fun chainLength(track: Int, length: Int) {}
+        fun chainSlot(track: Int, slot: Int, steps: Array<StepState>) {}
+        fun scale(root: Int, intervals: IntArray) {}
+        fun macro(index: Int, value: Float) {}
+        fun sidechain(track: Int, drum: Int) {}
+        fun masterVolume(value: Float) {}
     }
     companion object {
         const val HOME = 0; const val SEQ = 1; const val SOUND = 2
@@ -42,10 +66,77 @@ class CafaSurface(
         val WHITE_KEYS = intArrayOf(0, 2, 4, 6, 7, 9, 11, 12, 14, 16, 18, 19, 21, 23, 24, 26)
     }
     val catalog = CafaCatalog()
-    private var catalogBank = 0
-    private val selectedEntries = arrayOfNulls<String>(8)
+    private val transportAdapter = LoomTransportAdapter(read, write, engine::playing, engine::recording, engine::tempo)
+    private val transportDispatcher = OperationDispatcher(transportAdapter)
+    private var transportSessionActive = false
+    private fun performTransport(target: ObjectRef, revision: Long, intent: TransportIntent): OperationResult {
+        if (!transportSessionActive) {
+            transportDispatcher.begin()
+            transportSessionActive = true
+        }
+        return transportDispatcher.submit(transportDispatcher.request(target, revision, intent))
+    }
+    private val transport = TransportControls(transportAdapter, ::performTransport)
+    private val partsAdapter = LoomPartsAdapter(read, write, selectTrack, engine::volume, engine::pan, engine::mute, engine::solo)
+    private val partsDispatcher = OperationDispatcher(partsAdapter)
+    private var partsSessionActive = false
+    private fun performParts(target: ObjectRef, revision: Long, intent: PartsIntent): OperationResult {
+        if (!partsSessionActive) {
+            partsDispatcher.begin()
+            partsSessionActive = true
+        }
+        if (intent is PartsIntent.SelectPart) releaseHeldNotes()
+        return partsDispatcher.submit(partsDispatcher.request(target, revision, intent))
+    }
+    private val parts = PartsControls(partsAdapter, ::performParts)
+    private var knownPartsContext: PartsState.Context? = null
+    private var mixBank = 0
+    private val soundBanks = ParameterBanks(LoomParameterAdapter(read, write, ::catalogControls,
+        { catalog.generation }, engine::parameter))
+    private var heldDefaultControls: List<org.fm1.companion.control.ParameterDescriptor?>? = null
+    private data class SoundIdentity(
+        val trackId: Int, val engine: EngineType, val catalogEntryId: String?,
+        val catalogGeneration: Int, val selectedFmPreset: Int?, val selectedFmDrumInstrument: Int,
+        val soundFontPath: String?, val soundFontPresetIndex: Int, val soundFontPresetName: String,
+        val lastSamplePath: String?, val activeWavetableName: String,
+        val soundBindings: List<Fm1KnobBinding?>?,
+        val catalogControls: List<org.fm1.companion.control.ParameterDescriptor>
+    )
+    private var heldSoundIdentity: SoundIdentity? = null
+    private val sequenceAdapter = LoomSequenceAdapter(read, write,
+        { trackIndex, lane, step, value ->
+            engine.step(trackIndex, step, if (lane >= 0) value.copy(notes = listOf(60 + lane)) else value)
+        },
+        { selected ->
+            val s = read(); val index = s.selectedTrackIndex
+            engine.lane(index, selected)
+            replaceTrack(s, s.tracks[index].copy(selectedFmDrumInstrument = selected))
+        }, ::heldLockControls)
+    private val sequenceDispatcher = OperationDispatcher(sequenceAdapter)
+    private var sequenceSessionActive = false
+    private fun performSequence(target: ObjectRef, revision: Long, intent: SequenceIntent): OperationResult {
+        if (!sequenceSessionActive) {
+            sequenceDispatcher.begin(); sequenceSessionActive = true
+        }
+        return sequenceDispatcher.submit(sequenceDispatcher.request(target, revision, intent))
+    }
+    private val sequenceEditor = SkiffSequenceEditor(sequenceAdapter, ::performSequence) { pitch, _ ->
+        val track = read().selectedTrackIndex
+        engine.noteOn(track, pitch)
+        val release: () -> Unit = { engine.noteOff(track, pitch) }
+        release
+    }
+    private var knownSequenceContext: Long? = null
+    private var knownSequencerBank: Int? = null
+    private var homeUsedAsShift = false
+    private var sequenceMessage = ""
+    private var staleSequenceCancelled = false
+    private var knownSoundContext: ParameterBanks.Context? = null
     private var catalogContext = ""
     private var catalogEpoch = 1
+    private var lastKnobBindings: List<Fm1KnobBinding?>? = null
+    private var saveFeedback = ""
+    private var saveFeedbackUntil = 0L
     init {
         for (type in EngineType.values()) catalog.register(CafaCatalog.Entry(type.name, type.name.replace('_', ' '), type, { state, track ->
             // Reuse the user's live phone control assignments, not firmware engine tables.
@@ -55,27 +146,72 @@ class CafaSurface(
             else soundParams(track).map { CafaCatalog.Control(it.id, it.label, it.fallback) }
         }))
     }
-    private fun catalogEntry(t: TrackState): CafaCatalog.Entry {
+    private fun catalogEntry(t: TrackState): CafaCatalog.Entry? {
         val entries = catalog.list()
-        return entries.firstOrNull { it.id == selectedEntries[read().selectedTrackIndex] && it.backend == t.engineType }
-            ?: entries.first { it.backend == t.engineType }.also { selectedEntries[read().selectedTrackIndex] = it.id }
+        return if (t.catalogEntryId == null) entries.firstOrNull { it.id == t.engineType.name && it.backend == t.engineType }
+            else entries.firstOrNull { it.id == t.catalogEntryId && it.backend == t.engineType }
+    }
+    private fun catalogControls(s: GrooveboxState, t: TrackState): List<CafaCatalog.Control?> {
+        val entry = catalogEntry(t) ?: return emptyList()
+        val controls = entry.controls(s,t)
+        val bindings = t.fm1KnobBindings ?: return controls
+        // Fixed positions preserve empty knobs and duplicate assignments. The normal banks follow.
+        return List(4) { i ->
+            bindings.getOrNull(i)?.takeIf { it.isValid() }?.let {
+                CafaCatalog.Control(it.parameterId, it.label, it.defaultValue)
+            }
+        } + controls
+    }
+    private fun heldLockControls(s: GrooveboxState, t: TrackState): List<ParameterBanks.Control?> {
+        val descriptors = t.fm1StepKnobBindings?.let { bindings -> List(4) { index ->
+            bindings.getOrNull(index)?.takeIf { it.isValid() }?.let { binding ->
+                CafaCatalog.Control(binding.parameterId, binding.label, binding.defaultValue).descriptor
+            }
+        } } ?: (heldDefaultControls ?: List(4) { index -> catalogControls(s, t).getOrNull(index)?.descriptor })
+        return descriptors.map { descriptor -> descriptor?.let {
+            ParameterBanks.Control(it, t.parameters[it.id.toIntOrNull()] ?: it.fallback)
+        } }
+    }
+    private fun soundIdentity(s: GrooveboxState, t: TrackState) = SoundIdentity(
+        t.id, t.engineType, t.catalogEntryId, catalog.generation, t.selectedFmPreset,
+        t.selectedFmDrumInstrument, t.soundFontPath, t.soundFontPresetIndex,
+        t.soundFontPresetName, t.lastSamplePath, t.activeWavetableName,
+        t.fm1KnobBindings, catalogEntry(t)?.controls?.invoke(s, t).orEmpty().map { it.descriptor }
+    )
+    private fun captureSoundControls() {
+        val s = read(); val t = s.tracks.getOrNull(s.selectedTrackIndex) ?: return
+        val identity = soundIdentity(s, t)
+        if (heldSoundIdentity != null && heldSoundIdentity != identity) soundBanks.resetBank()
+        heldDefaultControls = when (page) {
+            SOUND -> soundBanks.page().controls.map { it?.parameter }
+            ENV -> List(4) { index -> params(t).getOrNull(index)?.let { CafaCatalog.Control(it.id, it.label, it.fallback).descriptor } }
+            else -> heldDefaultControls
+        }
+        heldSoundIdentity = identity
     }
     private fun syncCatalog(s: GrooveboxState, t: TrackState) {
-        val entry = catalogEntry(t)
-        val controls = entry.controls(s,t)
-        require(controls.size <= 65532) { "Catalog exceeds 16383 four-control banks" }
-        catalogBank = catalogBank.coerceIn(0, ((controls.size + 3) / 4 - 1).coerceAtLeast(0))
-        val context = "${s.selectedTrackIndex}:$page:${entry.id}:$catalogBank:${catalog.generation}:${controls}"
-        if (context != catalogContext) { catalogContext = context; catalogEpoch = (catalogEpoch + 1) and 16383 }
+        val controls = catalogControls(s,t)
+        if (lastKnobBindings != t.fm1KnobBindings) {
+            soundBanks.resetBank()
+            lastKnobBindings = t.fm1KnobBindings
+        }
+        val soundContext = soundBanks.page().context
+        val context = "${s.selectedTrackIndex}:$page:$mixBank:${t.engineType}:${t.catalogEntryId}:${soundContext.bank}:${catalog.generation}:${controls}"
+        if (context != catalogContext || (page == SOUND && soundContext != knownSoundContext)) {
+            catalogContext = context; catalogEpoch = (catalogEpoch + 1) and 16383
+        }
+        knownSoundContext = soundContext
     }
     private fun browseEngine(delta: Int) {
         val s = state(); val t = s.tracks[s.selectedTrackIndex]; val entries = catalog.list()
         val next = entries[(entries.indexOf(catalogEntry(t)) + delta).coerceIn(0, entries.lastIndex)]
-        for (k in heldNotes.indices) if (heldNotes[k] >= 0) { engine.noteOff(heldTracks[k], heldNotes[k]); heldNotes[k] = -1 }
-        heldSteps.fill(null)
+        releaseHeldNotes()
+        sequenceEditor.cancel()
         engine.selectEngine(s.selectedTrackIndex, next.backend); next.activate(s.selectedTrackIndex)
-        selectedEntries[s.selectedTrackIndex] = next.id; catalogBank = 0
-        replaceTrack(s, t.copy(engineType = next.backend))
+        soundBanks.resetBank()
+        heldDefaultControls = null; heldSoundIdentity = null
+        replaceTrack(s, t.copy(engineType = next.backend, catalogEntryId = next.id,
+            fm1KnobBindings = null, fm1StepKnobBindings = null))
     }
     private var buttons = 0
     private var keys = 0L
@@ -83,11 +219,14 @@ class CafaSurface(
     private var first = true
     private val heldTracks = IntArray(27)
     private val heldNotes = IntArray(27) { -1 }
+    private fun releaseHeldNotes() {
+        for (k in heldNotes.indices) if (heldNotes[k] >= 0) {
+            engine.noteOff(heldTracks[k], heldNotes[k]); heldNotes[k] = -1
+        }
+    }
     private var lastTab = -1
     private var lastTrack = -1
-    private var stepContext = ""
-    private data class HeldStep(val track: Int, val lane: Int, val index: Int, var edited: Boolean = false)
-    private val heldSteps = arrayOfNulls<HeldStep>(27)
+    private var lastTrackId: Int? = null
     var lfoIndex = 0; private set
     var fxIndex = 0; private set
     var arpPage = 0; private set
@@ -95,34 +234,70 @@ class CafaSurface(
     var octave = 0; private set
     var note = 60; private set
 
-    fun reset() {
-        for (k in heldNotes.indices) if (heldNotes[k] >= 0) engine.noteOff(heldTracks[k], heldNotes[k])
-        heldSteps.fill(null); heldNotes.fill(-1); buttons = 0; keys = 0; lastSerial = 0; first = true
+    override fun reset() {
+        transportDispatcher.end(); transportSessionActive = false
+        partsDispatcher.end(); partsSessionActive = false
+        sequenceEditor.cancel()
+        sequenceDispatcher.end(); sequenceSessionActive = false
+        releaseHeldNotes()
+        heldNotes.fill(-1); buttons = 0; keys = 0; lastSerial = 0; first = true
+        knownSoundContext = null; knownPartsContext = null; mixBank = 0
+        knownSequenceContext = null; knownSequencerBank = null
+        homeUsedAsShift = false; staleSequenceCancelled = false
+        heldDefaultControls = null; heldSoundIdentity = null
     }
     fun stop() {
-        reset(); engine.playing(false); engine.recording(false)
-        write(read().copy(isPlaying = false, isRecording = false, heldNotes = emptySet()))
+        try {
+            // A bad imported tempo cannot prevent transport and held-note teardown.
+            reportTransport(performTransport(transportAdapter.target, 0, TransportIntent.Stop))
+        } finally {
+            reset()
+            write(read().copy(heldNotes = emptySet()))
+        }
     }
     private fun state(): GrooveboxState {
         val s = read()
         require(s.selectedTrackIndex in 0..7 && s.selectedTrackIndex in s.tracks.indices)
-        if (lastTrack != s.selectedTrackIndex) {
-            heldSteps.fill(null); lastTrack = s.selectedTrackIndex
+        if (lastTrack != s.selectedTrackIndex || lastTrackId != s.tracks[s.selectedTrackIndex].id) {
+            releaseHeldNotes()
+            soundBanks.resetBank()
+            sequenceEditor.cancel(); heldDefaultControls = null; heldSoundIdentity = null
+            knownSequencerBank = s.currentSequencerBank
+            lastTrack = s.selectedTrackIndex; lastTrackId = s.tracks[s.selectedTrackIndex].id
         }
         if (s.selectedTab != lastTab) {
-            heldSteps.fill(null)
+            if (page == SOUND || page == ENV) captureSoundControls()
+            sequenceEditor.cancel()
             page = when (s.selectedTab) { 1 -> SOUND; 2 -> SEQ; 3 -> FX; 4 -> LFO; else -> HOME }
             lastTab = s.selectedTab
         }
         val t = s.tracks[s.selectedTrackIndex]
-        val context = "${s.selectedTrackIndex}:${t.engineType}:${lane(t)}:${bank(s,t)}:${t.patternLength}"
-        if (context != stepContext) { heldSteps.fill(null); stepContext = context }
+        if (knownSequencerBank != null && knownSequencerBank != s.currentSequencerBank && page == SEQ)
+            sequenceEditor.cancel()
+        knownSequencerBank = s.currentSequencerBank
+        val soundIdentity = soundIdentity(s, t)
+        if (heldSoundIdentity != soundIdentity) {
+            heldDefaultControls = null
+            heldSoundIdentity = soundIdentity
+        }
         syncCatalog(s, t)
+        val currentPartsContext = parts.state().context
+        if (knownPartsContext != null && currentPartsContext != knownPartsContext)
+            catalogEpoch = (catalogEpoch + 1) and 16383
+        knownPartsContext = currentPartsContext
+        if (page == SEQ) {
+            val sequenceContext = sequenceEditor.view().context
+            if (knownSequenceContext != null && sequenceContext != knownSequenceContext)
+                catalogEpoch = (catalogEpoch + 1) and 16383
+            knownSequenceContext = sequenceContext
+        } else knownSequenceContext = null
         return s
     }
     fun choosePage(value: Int) {
-        heldSteps.fill(null)
+        if (page == SOUND || page == ENV) captureSoundControls()
+        if (page == SEQ) sequenceEditor.cancel()
         page = value.coerceIn(HOME, PATTERN)
+        if (page != MIX) mixBank = 0
         lastTab = when (page) { SOUND, ENV -> 1; SEQ, PATTERN -> 2; FX -> 3; LFO -> 4; else -> 0 }
         write(read().copy(selectedTab = lastTab))
     }
@@ -134,7 +309,7 @@ class CafaSurface(
     private fun steps(t: TrackState) = if (multi(t)) t.drumSteps[lane(t)] else t.steps
     private fun bank(s: GrooveboxState, t: TrackState) = s.currentSequencerBank.coerceIn(0, (t.patternLength.coerceIn(1, 64) - 1) / 16)
 
-    fun input(serial: Int, payload: ByteArray): Boolean {
+    override fun input(serial: Int, payload: ByteArray): Boolean {
         if (payload.size != 22 || payload.any { it.toInt() < 0 }) return false
         if (!first && serial == lastSerial) return true
         if (serial != ((lastSerial + 1) and 16383)) return false
@@ -143,45 +318,51 @@ class CafaSurface(
         if ((nextKeys and 0x7ffffffL.inv()) != 0L) return false
         val initial = first
         var pressed = nextButtons and buttons.inv()
+        val releasedButtons = buttons and nextButtons.inv()
         var down = nextKeys and keys.inv()
         val up = keys and nextKeys.inv()
         buttons = nextButtons; keys = nextKeys; lastSerial = serial
         if (initial) { first = false; pressed = 0; down = 0 }
         state() // Cancel pending gestures if the touchscreen changed track/page.
         val staleContext = Protocol.u14(payload,20) != catalogEpoch
-        // Cancellation wins when a release and navigation share one hardware scan.
-        val familyButtons = (1 shl 0) or (1 shl 1) or (1 shl 2) or (1 shl 3) or
-            (1 shl 4) or (1 shl 5) or (1 shl 6) or (1 shl 8) or (1 shl 9)
-        if ((pressed and familyButtons) != 0 || (!initial &&
-            (Protocol.u14(payload, 8) != 8192 || (page == SEQ && Protocol.u14(payload, 10) != 8192))))
-            heldSteps.fill(null)
         for (k in 0..26) if ((up and (1L shl k)) != 0L) {
             if (heldNotes[k] >= 0) {
                 engine.noteOff(heldTracks[k], heldNotes[k]); heldNotes[k] = -1
             }
-            heldSteps[k]?.let { h ->
-                val s = state(); val t = s.tracks[s.selectedTrackIndex]
-                if (!staleContext && !h.edited && page == SEQ && h.track == s.selectedTrackIndex && h.lane == lane(t))
-                    toggle(s, t, h.index)
-            }
-            heldSteps[k] = null
         }
-        if (staleContext) { heldSteps.fill(null); return true }
+        if (staleContext) {
+            if (!staleSequenceCancelled) sequenceEditor.cancelGestures()
+            staleSequenceCancelled = true
+            return true
+        }
+        staleSequenceCancelled = false
         val inputEpoch = catalogEpoch
+        if ((pressed and (1 shl 6)) != 0) homeUsedAsShift = false
+        val shiftHeld = (buttons and (1 shl 6)) != 0
+        val presetsDelta = if (initial) 0 else Protocol.u14(payload, 10) - 8192
+        if (shiftHeld && page == SEQ && presetsDelta != 0) homeUsedAsShift = true
+        val editPressed = page == SEQ && (pressed and (1 shl 4)) != 0 &&
+            sequenceEditor.view().let { it.stepEntry || it.holdingSteps }
+        if (page != SEQ && (pressed and (1 shl 6)) != 0) choosePage(HOME)
         for ((bit, target) in listOf(0 to FX, 1 to SOUND, 2 to ENV, 3 to LFO,
-                4 to SOUND, 5 to MIX, 6 to HOME, 8 to ARP, 9 to SEQ)) {
-            if ((pressed and (1 shl bit)) != 0) {
+                4 to SOUND, 5 to MIX, 8 to ARP, 9 to SEQ)) {
+            if ((pressed and (1 shl bit)) != 0 && !(bit == 4 && editPressed)) {
                 if (target == SEQ && page == SEQ) choosePage(PATTERN) else choosePage(target)
             }
         }
-        if ((pressed and (1 shl 7)) != 0) save()
-        if ((pressed and (1 shl 10)) != 0) {
-            val playing = !read().isPlaying
-            engine.playing(playing)
-            if (!playing) engine.recording(false)
-            write(read().copy(isPlaying = playing, isRecording = playing && read().isRecording))
+        if ((releasedButtons and (1 shl 6)) != 0 && page == SEQ && !homeUsedAsShift) choosePage(HOME)
+        if ((pressed and (1 shl 7)) != 0) {
+            saveFeedback = if (save()) "SAVED" else "SAVE FAILED"
+            saveFeedbackUntil = System.nanoTime() + 2_000_000_000L
+            notice(saveFeedback)
         }
-        if ((pressed and (1 shl 11)) != 0) {
+        if ((pressed and (1 shl 10)) != 0) {
+            val current = transport.state()
+            if (current.playing) reportTransport(transport.stop())
+            else if (page == SEQ && sequenceEditor.view().stepEntry) showSequenceMessage("LIVE REC UNAVAILABLE")
+            else reportTransport(transport.start(current.context))
+        }
+        if ((pressed and (1 shl 11)) != 0 && page != SEQ) {
             notice("FM1 REC is unavailable in this version: complete recorded-step synchronization is not implemented.")
         }
         if ((pressed and (1 shl 12)) != 0) octave = (octave - 1).coerceIn(-3, 3)
@@ -189,104 +370,91 @@ class CafaSurface(
         // Track changes precede new key presses in the same input snapshot.
         val trackDelta = if (initial) 0 else Protocol.u14(payload, 8) - 8192
         if (trackDelta != 0) {
-            val s = state()
-            heldSteps.fill(null)
-            selectTrack((s.selectedTrackIndex + trackDelta).coerceIn(0, minOf(7, s.tracks.lastIndex)))
+            sequenceEditor.cancel()
+            val expected = knownPartsContext ?: parts.state().context
+            reportParts(parts.select(trackDelta, expected))
         }
         state()
         if (catalogEpoch != inputEpoch) down = 0L
-        for (k in 0..26) if ((down and (1L shl k)) != 0L) {
-            val s = state(); val t = s.tracks[s.selectedTrackIndex]
-            val white = WHITE_KEYS.indexOf(k)
-            if (page == SEQ && white >= 0) {
-                val index = bank(s, t) * 16 + white
-                if (index < t.patternLength) heldSteps[k] = HeldStep(s.selectedTrackIndex, lane(t), index)
-            } else {
+        if (page != SEQ) for (k in 0..26) if ((down and (1L shl k)) != 0L) {
+                val s = state(); val t = s.tracks[s.selectedTrackIndex]
+                val white = WHITE_KEYS.indexOf(k)
                 if (multi(t) && white !in 0..lastLane(t)) continue
                 val pitch = if (multi(t)) 60 + white else (53 + k + octave * 12).coerceIn(0, 127)
                 note = pitch; heldTracks[k] = s.selectedTrackIndex; heldNotes[k] = pitch
                 engine.noteOn(s.selectedTrackIndex, pitch)
                 write(read().copy(lastMidiNote = pitch, lastMidiVelocity = 100))
-            }
         }
+        val sequenceKnobs = IntArray(4)
+        var sequenceSelect = 0
+        var sequencePresets = 0
         if (!initial) for (e in 0..6) {
             if (e == 1) continue
             val d = Protocol.u14(payload, 6 + e * 2) - 8192
             if (d == 0) continue
+            if (e == 0 && (buttons and (1 shl 5)) != 0) { tempo(d); continue }
+            if (catalogEpoch != inputEpoch) continue
             val s = state(); val t = s.tracks[s.selectedTrackIndex]
             when (e) {
-                0 -> if ((buttons and (1 shl 5)) != 0) tempo(s, d) else when (page) {
-                    SEQ, PATTERN -> choosePage(if (d > 0) PATTERN else SEQ)
+                0 -> when (page) {
+                    SEQ -> sequenceSelect = d
+                    PATTERN -> choosePage(if (d > 0) PATTERN else SEQ)
                     LFO -> lfoIndex = (lfoIndex + d).coerceIn(0, s.lfos.lastIndex)
                     FX -> fxIndex = (fxIndex + d).coerceIn(0, minOf(t.fxSends.lastIndex, t.fxMix.lastIndex, s.fxEnabled.lastIndex))
                     ARP -> arpPage = (arpPage + d).coerceIn(0, 1)
-                    SOUND -> { val count = catalogEntry(t).controls(s,t).size; catalogBank = (catalogBank + d).coerceIn(0, ((count+3)/4-1).coerceAtLeast(0)) }
+                    SOUND -> { soundBanks.selectBank(d) }
+                    MIX -> { mixBank = (mixBank + d).coerceIn(0, 1); state() }
                     else -> Unit // SELECT stays within the physical button's family.
                 }
                 2 -> if (catalogEpoch != inputEpoch) {
                     // Navigation in this scan invalidates its old-context PRESET intent.
                 } else if (page == SEQ) {
-                    heldSteps.fill(null)
-                    write(s.copy(currentSequencerBank = (bank(s, t) + d).coerceIn(0, (t.patternLength.coerceIn(1, 64) - 1) / 16)))
+                    sequencePresets = d
                 } else if (page == SOUND && catalogEpoch == inputEpoch) { browseEngine(d)
                 } else if (multi(t)) {
                     val selected = (t.selectedFmDrumInstrument + d).coerceIn(0, lastLane(t))
                     engine.lane(s.selectedTrackIndex, selected)
                     replaceTrack(s, t.copy(selectedFmDrumInstrument = selected))
                 } else notice("Preset loading remains on the phone; existing sounds are unchanged.")
-                else -> { state(); if (catalogEpoch == inputEpoch) knob(e - 3, d) }
+                else -> { state(); if (catalogEpoch == inputEpoch) {
+                    if (page == SEQ) sequenceKnobs[e - 3] = d else knob(e - 3, d)
+                } }
             }
+        }
+        if (page == SEQ && catalogEpoch == inputEpoch) {
+            val view = sequenceEditor.scan(SequenceScan(down, up, nextKeys, sequenceKnobs,
+                sequencePresets, sequenceSelect, shiftHeld,
+                (pressed and (1 shl 11)) != 0, editPressed, octave,
+                sequenceEditor.view().context))
+            if (view.message.isNotEmpty() && view.message != sequenceMessage) showSequenceMessage(view.message)
+            if (view.message.isEmpty()) sequenceMessage = ""
+            val current = read()
+            if (current.currentSequencerBank != view.bank) {
+                knownSequencerBank = view.bank
+                write(current.copy(currentSequencerBank = view.bank))
+            }
+            state()
         }
         return true
     }
-    private fun tempo(s: GrooveboxState, delta: Int) {
-        val v = (s.tempo + delta).coerceIn(12f, 240f)
-        engine.tempo(v); write(s.copy(tempo = v))
+    private fun showSequenceMessage(message: String) {
+        sequenceMessage = message
+        saveFeedback = message
+        saveFeedbackUntil = System.nanoTime() + 2_000_000_000L
+        notice(message)
+    }
+    private fun tempo(delta: Int) {
+        val current = transport.state()
+        reportTransport(transport.adjustTempo(delta, current.context))
+    }
+    private fun reportTransport(result: OperationResult) {
+        if (result.code != ResultCode.COMPLETED) notice("FM1 transport: ${result.message.ifEmpty { result.code.name }}")
+    }
+    private fun reportParts(result: OperationResult) {
+        if (result.code != ResultCode.COMPLETED) notice("FM1 mix: ${result.message.ifEmpty { result.code.name }}")
+        else knownPartsContext = parts.state().context
     }
     private fun replaceTrack(s: GrooveboxState, t: TrackState) = write(s.copy(tracks = s.tracks.mapIndexed { i, old -> if (i == s.selectedTrackIndex) t else old }))
-    private fun toggle(s: GrooveboxState, t: TrackState, index: Int) {
-        if (s.isRecording) { notice("Stop recording before replacing a step."); return }
-        if (index !in 0 until t.patternLength.coerceIn(1, 64)) return
-        val old = steps(t)[index]
-        if (old.parameterLocks.isNotEmpty()) {
-            notice("Edit this P-locked step on the phone; FM1 will not overwrite its locks."); return
-        }
-        val pitches = if (multi(t)) listOf(60 + lane(t)) else old.notes.ifEmpty { listOf(note) }
-        val value = old.copy(active = !old.active, notes = pitches)
-        val updated = steps(t).mapIndexed { i, v -> if (i == index) value else v }
-        val next = if (multi(t)) t.copy(drumSteps = t.drumSteps.mapIndexed { i, v -> if (i == lane(t)) updated else v }) else t.copy(steps = updated)
-        engine.step(s.selectedTrackIndex, index, value); replaceTrack(s, next)
-    }
-    private fun editHeld(index: Int, delta: Int): Boolean {
-        val held = heldSteps.filterNotNull()
-        if (held.isEmpty()) return false
-        // Mark consumed even if refused, so releasing cannot accidentally toggle a hit.
-        held.forEach { it.edited = true }
-        if (read().isRecording) { notice("Stop recording before replacing a step."); return true }
-        for (h in held) {
-            val s = state(); val t = s.tracks[s.selectedTrackIndex]
-            if (h.track != s.selectedTrackIndex || h.lane != lane(t) || h.index !in 0 until t.patternLength) continue
-            val old = steps(t)[h.index]
-            if (old.parameterLocks.isNotEmpty()) {
-                notice("Edit this P-locked step on the phone; FM1 will not overwrite its locks."); continue
-            }
-            val pitches = old.notes.ifEmpty { listOf(if (multi(t)) 60 + lane(t) else note) }
-            val value = when (index) {
-                0 -> if (multi(t)) old else {
-                    val d = delta.coerceIn(-pitches.minOrNull()!!, 127 - pitches.maxOrNull()!!)
-                    old.copy(notes = pitches.map { it + d })
-                }
-                1 -> old.copy(velocity = (old.velocity + delta / 100f).coerceIn(0f, 1f),
-                    noteVelocities = old.noteVelocities.map { (it + delta / 100f).coerceIn(0f, 1f) })
-                2 -> old.copy(gate = (old.gate + delta / 10f).coerceIn(.1f, 64f))
-                else -> old.copy(probability = (old.probability + delta / 100f).coerceIn(0f, 1f))
-            }
-            val updated = steps(t).mapIndexed { i, v -> if (i == h.index) value else v }
-            val next = if (multi(t)) t.copy(drumSteps = t.drumSteps.mapIndexed { i, v -> if (i == lane(t)) updated else v }) else t.copy(steps = updated)
-            engine.step(s.selectedTrackIndex, h.index, value); replaceTrack(s, next)
-        }
-        return true
-    }
     private data class Param(val id: Int, val label: String, val fallback: Float = 0f)
     private fun params(t: TrackState): List<Param> {
         if (page == ENV) return when (t.engineType) {
@@ -313,29 +481,33 @@ class CafaSurface(
     fun knob(index: Int, delta: Int) {
         if (index !in 0..3 || delta == 0) return
         val s = state(); val i = s.selectedTrackIndex; val t = s.tracks[i]
-        if (page == SEQ && editHeld(index, delta)) return
+        if (page == SEQ) {
+            val deltas = IntArray(4); deltas[index] = delta
+            val view = sequenceEditor.scan(SequenceScan(keysHeld = keys, knobs = deltas,
+                octave = octave, expectedContext = sequenceEditor.view().context))
+            if (view.message.isNotEmpty() && view.message != sequenceMessage) showSequenceMessage(view.message)
+            state()
+            return
+        }
         when (page) {
-            SEQ -> when (index) {
-                0 -> note = (note + delta).coerceIn(0, 127)
-                1 -> changeLength(s, t, delta)
-                2 -> if (multi(t)) {
-                    val selected = (lane(t) + delta).coerceIn(0, lastLane(t))
-                    engine.lane(i, selected); replaceTrack(s, t.copy(selectedFmDrumInstrument = selected))
-                }
-                3 -> tempo(s, delta)
-            }
             PATTERN -> when (index) {
                 0 -> changeLength(s, t, delta)
-                1 -> tempo(s, delta)
+                1 -> tempo(delta)
                 2 -> { val v = (s.swing + delta / 100f).coerceIn(-.23f, .23f); engine.swing(v); write(s.copy(swing = v)) }
                 3 -> { val v = (t.humanize + delta / 100f).coerceIn(0f, 1f); engine.humanize(i, v); replaceTrack(s, t.copy(humanize = v)) }
             }
-            MIX, HOME -> when (index) {
-                0 -> { val v = (t.volume + delta / 100f).coerceIn(0f, 1f); engine.volume(i, v); replaceTrack(s, t.copy(volume = v)) }
-                1 -> { val v = (t.pan + delta / 100f).coerceIn(0f, 1f); engine.pan(i, v); replaceTrack(s, t.copy(pan = v)) }
-                2 -> { val v = delta > 0; engine.mute(i, v); replaceTrack(s, t.copy(isMuted = v)) }
-                3 -> tempo(s, delta)
-            }
+            MIX, HOME -> if (index == 3 && (page == HOME || mixBank == 0)) tempo(delta)
+                else {
+                    val expected = knownPartsContext ?: parts.state().context
+                    if (index == 0) {
+                        val current = parts.state()
+                        if (current.context != expected) reportParts(OperationResult(ResultCode.STALE))
+                        else {
+                            val value = (t.volume + delta / 100f).coerceIn(0f, 1f)
+                            reportParts(performParts(current.selected, current.revision, PartsIntent.SetLevel(value)))
+                        }
+                    } else reportParts(parts.adjust(index, delta, expected))
+                }
             LFO -> {
                 val old = s.lfos[lfoIndex]
                 val v = when (index) {
@@ -376,11 +548,20 @@ class CafaSurface(
                 engine.arp(i, v); replaceTrack(s, t.copy(arpConfig = v))
             }
             SOUND -> {
-                val p = catalogEntry(t).controls(s,t).getOrNull(catalogBank*4+index) ?: return
-                val v = (p.value(t) + delta*p.step).coerceIn(p.minimum,p.maximum)
-                engine.parameter(i,p.id,v); replaceTrack(s,t.copy(parameters=t.parameters+(p.id to v)))
+                val entry = catalogEntry(t)
+                if (entry == null) { notice("Missing catalog entry ${t.catalogEntryId}"); return }
+                val expected = knownSoundContext ?: return
+                when (soundBanks.adjust(index, delta, expected)) {
+                    // Accepted relative turns can continue before the next display refresh.
+                    // A phone edit still changes the revision observed by syncCatalog.
+                    ParameterBanks.Result.COMPLETED -> knownSoundContext = soundBanks.page().context
+                    ParameterBanks.Result.UNSUPPORTED -> Unit
+                    ParameterBanks.Result.STALE -> notice("Sound changed; refresh the controls and retry.")
+                    else -> notice("Sound parameter edit was not accepted.")
+                }
             }
             ENV -> {
+                if (catalogEntry(t) == null) { notice("Missing catalog entry ${t.catalogEntryId}"); return }
                 val p = params(t).getOrNull(index)
                 if (p == null) { notice("This engine's controls remain available on the phone."); return }
                 val v = ((t.parameters[p.id] ?: p.fallback) + delta / 100f).coerceIn(0f, 1f)
@@ -390,21 +571,22 @@ class CafaSurface(
     }
     private fun changeLength(s: GrooveboxState, t: TrackState, delta: Int) {
         val length = (t.patternLength + delta).coerceIn(4, 64)
-        heldSteps.fill(null)
+        sequenceEditor.cancel()
         engine.length(s.selectedTrackIndex, length)
         replaceTrack(s.copy(currentSequencerBank = s.currentSequencerBank.coerceIn(0, (length - 1) / 16)),
             t.copy(patternLength = length, numPages = 1, stepsPerPage = length))
     }
-    fun snapshot(): ByteArray {
+    override fun snapshot(): ByteArray {
         val s = state(); val t = s.tracks[s.selectedTrackIndex]
+        val sequenceView = if (page == SEQ) sequenceEditor.view() else null
         lfoIndex = lfoIndex.coerceIn(0, s.lfos.lastIndex)
         fxIndex = fxIndex.coerceIn(0, minOf(t.fxSends.lastIndex, t.fxMix.lastIndex, s.fxEnabled.lastIndex))
         require(s.tempo.isFinite() && s.tempo in 12f..300f) { "Tempo outside CAFA v5 range" }
-        val length = t.patternLength.coerceIn(1, 64); val start = bank(s, t) * 16
+        val length = t.patternLength.coerceIn(1, 64); val start = (sequenceView?.bank ?: bank(s, t)) * 16
         val head = if (s.isPlaying) engine.playhead(s.selectedTrackIndex, lane(t)).takeIf { it in 0 until length } ?: Protocol.NONE else Protocol.NONE
         val b = ByteArray(156)
         b[0] = s.selectedTrackIndex.toByte(); b[1] = page.toByte()
-        b[2] = ((if (s.isPlaying) 1 else 0) or (if (s.isRecording) 2 else 0) or (if (t.isMuted) 4 else 0) or ((octave + 3) shl 3)).toByte()
+        b[2] = ((if (s.isPlaying) 1 else 0) or (if (s.isRecording || sequenceView?.stepEntry == true) 2 else 0) or (if (t.isMuted) 4 else 0) or ((octave + 3) shl 3)).toByte()
         Protocol.put14(b, 3, length); Protocol.put14(b, 5, start); Protocol.put14(b, 7, head); Protocol.put14(b, 9, s.tempo.roundToInt().coerceIn(12, 300))
         var mask = 0; var leds = keys
         for (i in 0..15) if (start + i < length) {
@@ -413,22 +595,32 @@ class CafaSurface(
         }
         b[11] = (mask and 127).toByte(); b[12] = ((mask ushr 7) and 127).toByte(); b[13] = ((mask ushr 14) and 3).toByte()
         val pageLed = intArrayOf(6, 9, 4, 2, 0, 5, 3, 8, 9)[page]
-        Protocol.put14(b, 14, (1 shl pageLed) or (if (s.isPlaying) 1 shl 10 else 0) or (if (s.isRecording) 1 shl 11 else 0))
+        Protocol.put14(b, 14, (1 shl pageLed) or (if (s.isPlaying) 1 shl 10 else 0) or (if (s.isRecording || sequenceView?.stepEntry == true) 1 shl 11 else 0))
         Protocol.put28(b, 16, leds)
-        Protocol.text(b, 20, 16, "LOOM T${s.selectedTrackIndex + 1}" + if (multi(t)) " ROW${lane(t) + 1}" else " OCT${if (octave >= 0) "+" else ""}$octave")
-        Protocol.text(b, 36, 16, when (page) {
+        Protocol.text(b, 20, 16, sequenceView?.title ?: ("LOOM T${s.selectedTrackIndex + 1}" + if (multi(t)) " ROW${lane(t) + 1}" else " OCT${if (octave >= 0) "+" else ""}$octave"))
+        Protocol.text(b, 36, 16, if (saveFeedback.isNotEmpty() && System.nanoTime() - saveFeedbackUntil < 0) saveFeedback else if (page == ENV && catalogEntry(t) == null) "MISSING ENTRY" else when (page) {
+            SEQ -> sequenceView?.selectionText ?: ""
             LFO -> "LFO ${lfoIndex + 1} ${s.lfos[lfoIndex].targetLabel}"
             FX -> "LOOM FX ${fxIndex + 1}"
             ARP -> "ARP ${arpPage + 1} ${t.arpConfig.mode.name}"
             else -> t.engineType.name.replace('_', ' ')
         })
         val values: List<Pair<String, Int>> = when (page) {
-            SEQ -> heldSteps.filterNotNull().firstOrNull()?.let { h ->
-                val step = steps(t)[h.index]
-                listOf("NOTE" to (step.notes.firstOrNull() ?: note), "VEL %" to (step.velocity * 100).roundToInt(),
-                    "GATE x10" to (step.gate * 10).roundToInt(), "PROB %" to (step.probability * 100).roundToInt())
-            } ?: listOf("NOTE" to note, "LENGTH" to length, (if (multi(t)) "ROW" else "HOLD KEY") to (if (multi(t)) lane(t) + 1 else 0), "BPM" to s.tempo.roundToInt())
-            HOME, MIX -> listOf("VOL %" to (t.volume * 100).roundToInt(), "PAN %" to (t.pan * 100).roundToInt(), "MUTE" to if (t.isMuted) 1 else 0, "BPM" to s.tempo.roundToInt())
+            SEQ -> sequenceView?.controls.orEmpty().map { control ->
+                val raw = control.rawValue
+                if (!control.available || raw == null) "UNAVAIL" to 0
+                else when (control.format) {
+                    SequenceValueFormat.PERCENT -> (control.label.take(6) + " %") to (raw * 100).roundToInt()
+                    SequenceValueFormat.GATE_STEPS -> "LEN x100" to (raw * 100).roundToInt()
+                    SequenceValueFormat.STEP_POSITION -> "POS x100" to (raw * 100).roundToInt()
+                    SequenceValueFormat.BOOLEAN -> control.label to (if (raw >= .5f) 1 else 0)
+                    SequenceValueFormat.NUMBER, SequenceValueFormat.PITCH -> control.label to raw.roundToInt()
+                }
+            }
+            HOME, MIX -> listOf("VOL %" to (t.volume * 100).roundToInt(), "PAN %" to (t.pan * 100).roundToInt(),
+                "MUTE" to if (t.isMuted) 1 else 0,
+                (if (page == MIX && mixBank == 1) "SOLO" else "BPM") to
+                    (if (page == MIX && mixBank == 1) { if (t.isSoloed) 1 else 0 } else s.tempo.roundToInt()))
             SOUND, ENV -> params(t).map { it.label to ((t.parameters[it.id] ?: it.fallback) * 100).roundToInt() }.ifEmpty { listOf((if (page == ENV) "NO ADSR" else "ON PHONE") to 0) }
             PATTERN -> listOf("LENGTH" to length, "BPM" to s.tempo.roundToInt(),
                 "SWING+23" to ((s.swing + .23f) * 100).roundToInt(), "HUMAN %" to (t.humanize * 100).roundToInt())
@@ -448,18 +640,20 @@ class CafaSurface(
         }
         Protocol.put14(b,152,catalogEpoch)
         if (page == SOUND) {
-            val entry = catalogEntry(t); val entries = catalog.list(); val controls = entry.controls(s,t)
+            val entry = catalogEntry(t); val entries = catalog.list(); val soundPage = soundBanks.page()
+            val catalogBank = soundPage.context.bank
             b[1] = 9
-            Protocol.text(b,20,16,entry.name)
-            Protocol.text(b,36,16,"CONTROLS ${catalogBank+1}")
-            Protocol.put14(b,92,catalogBank); Protocol.put14(b,94,((controls.size+3)/4).coerceAtLeast(1))
-            Protocol.put14(b,96,entries.indexOf(entry)); Protocol.put14(b,98,entries.size)
+            Protocol.text(b,20,16,entry?.name ?: "MISSING ENTRY")
+            if (saveFeedback.isEmpty() || System.nanoTime() - saveFeedbackUntil >= 0)
+                Protocol.text(b,36,16,if (entry == null) "ID ${t.catalogEntryId}" else if (t.fm1KnobBindings != null && catalogBank == 0) "PRESET KNOBS" else "CONTROLS ${catalogBank+1-(if (t.fm1KnobBindings != null) 1 else 0)}")
+            Protocol.put14(b,92,catalogBank); Protocol.put14(b,94,soundPage.bankCount)
+            Protocol.put14(b,96,if (entry == null) 0 else entries.indexOf(entry)); Protocol.put14(b,98,entries.size)
             for (i in 0..3) {
-                val control = controls.getOrNull(catalogBank*4+i)
-                Protocol.text(b,52+i*8,8,control?.label ?: "")
-                Protocol.put14(b,84+i*2,control?.normalized(t) ?: 0)
-                Protocol.text(b,100+i*12,12,control?.display(t) ?: "")
-                b[148+i] = (if (control == null) 0 else if (control.choices.isEmpty()) 1 else 2).toByte()
+                val control = soundPage.controls[i]
+                Protocol.text(b,52+i*8,8,control?.parameter?.label ?: "")
+                Protocol.put14(b,84+i*2,control?.parameter?.normalized(control.value) ?: 0)
+                Protocol.text(b,100+i*12,12,control?.parameter?.display(control.value) ?: "")
+                b[148+i] = (if (control == null) 0 else if (control.parameter.choices.isEmpty()) 1 else 2).toByte()
             }
         }
         return b

@@ -579,6 +579,7 @@ void AudioEngineCore::triggerNoteLocked(int trackIndex, int note, int velocity,
       // Recording Logic Fix: Avoid duplicate notes if one is already recording
       // for this pitch
       if (mIsRecording) {
+        std::lock_guard<std::recursive_mutex> recordedLock(mRecordedStepLock);
         for (const auto &rn : track.mRecordingNotes) {
           if (rn.note == note)
             return; // Already recording this note (Legato/Slide)
@@ -755,6 +756,7 @@ void AudioEngineCore::triggerNoteLocked(int trackIndex, int note, int velocity,
     bool arpActive = track.arpeggiator.getMode() != ArpMode::OFF;
 
     if (mIsRecording && mIsPlaying && (!isSequencerTrigger || isArpTrigger)) {
+      std::lock_guard<std::recursive_mutex> recordedLock(mRecordedStepLock);
       // Don't re-record a note if the current step already has content
       // (prevents loop accumulation: each loop would double the note count)
       int currentStepIdx = track.sequencer.getCurrentStepIndex();
@@ -784,12 +786,15 @@ void AudioEngineCore::triggerNoteLocked(int trackIndex, int note, int velocity,
             drumIdx = note;
 
           if (drumIdx >= 0 && drumIdx < 16) {
+            const int drumStepIdx =
+                track.drumSequencers[drumIdx].getCurrentStepIndex();
             Step &s =
-                track.drumSequencers[drumIdx].getStepsMutable()[currentStepIdx];
+                track.drumSequencers[drumIdx].getStepsMutable()[drumStepIdx];
             // Use precise subStep
             s.addNote(note, static_cast<float>(velocity) / 127.0f, subStep);
+            markRecordedStepDirty(trackIndex, drumIdx, drumStepIdx);
 
-            track.mRecordingNotes.push_back({note, currentStepIdx, drumIdx,
+            track.mRecordingNotes.push_back({note, drumStepIdx, drumIdx,
                                              (uint64_t)mGlobalStepIndex,
                                              (double)subStep});
           }
@@ -800,17 +805,21 @@ void AudioEngineCore::triggerNoteLocked(int trackIndex, int note, int velocity,
             drumIdx = note - 60;
 
           if (drumIdx >= 0 && drumIdx < 16) {
+            const int drumStepIdx =
+                track.drumSequencers[drumIdx].getCurrentStepIndex();
             Step &s =
-                track.drumSequencers[drumIdx].getStepsMutable()[currentStepIdx];
+                track.drumSequencers[drumIdx].getStepsMutable()[drumStepIdx];
             s.addNote(note, static_cast<float>(velocity) / 127.0f, subStep);
+            markRecordedStepDirty(trackIndex, drumIdx, drumStepIdx);
 
-            track.mRecordingNotes.push_back({note, currentStepIdx, drumIdx,
+            track.mRecordingNotes.push_back({note, drumStepIdx, drumIdx,
                                              (uint64_t)mGlobalStepIndex,
                                              (double)subStep});
           }
         } else {
           Step &s = track.sequencer.getStepsMutable()[currentStepIdx];
           s.addNote(note, static_cast<float>(velocity) / 127.0f, subStep);
+          markRecordedStepDirty(trackIndex, -1, currentStepIdx);
 
           track.mRecordingNotes.push_back({note, currentStepIdx, -1,
                                            (uint64_t)mGlobalStepIndex,
@@ -1279,6 +1288,7 @@ void AudioEngineCore::processCommands() {
     std::lock_guard<std::mutex> lock(mCommandLock);
     if (mCommandQueue.empty())
       return;
+    mUISnapshotReady.store(false);
     todo.swap(mCommandQueue);
   }
   for (const auto &cmd : todo) {
@@ -1310,6 +1320,7 @@ void AudioEngineCore::processCommands() {
     case AudioCommand::SET_ENGINE_TYPE:
       if (cmd.trackIndex >= 0 && cmd.trackIndex < (int)mTracks.size()) {
         if (mTracks[cmd.trackIndex].engineType != cmd.data1) {
+          std::lock_guard<std::recursive_mutex> recordedLock(mRecordedStepLock);
           mTracks[cmd.trackIndex].engineType = cmd.data1;
           initTrack(cmd.trackIndex);
         }
@@ -1465,6 +1476,7 @@ void AudioEngineCore::processCommands() {
       break;
     case AudioCommand::SET_STEP:
       if (cmd.trackIndex >= 0 && cmd.trackIndex < (int)mTracks.size()) {
+        std::lock_guard<std::recursive_mutex> recordedLock(mRecordedStepLock);
         Step step;
         step.isSkipped = cmd.isSkipped;
         for (size_t i = 0; i < cmd.notes.size(); ++i) {
@@ -1473,13 +1485,16 @@ void AudioEngineCore::processCommands() {
                                                       : cmd.velocity;
           float off = (i < cmd.noteOffsets.size()) ? cmd.noteOffsets[i]
                                                    : cmd.subStepOffset;
-          step.addNote(n, vel, off);
+          float noteGate = (i < cmd.noteGates.size()) ? cmd.noteGates[i] : -1.0f;
+          step.addNote(n, vel, off, noteGate);
         }
         step.active = cmd.bValue;
         step.ratchet = cmd.ratchet;
         step.punch = cmd.punch;
         step.probability = cmd.probability;
         step.gate = cmd.gate;
+        if (cmd.hasParameterLocks)
+          step.parameterLocks = cmd.parameterLocks;
 
         int firstNote = cmd.notes.empty() ? 60 : cmd.notes[0];
         int drumIdx = -1;
@@ -1978,6 +1993,7 @@ void AudioEngineCore::releaseNoteLocked(int trackIndex, int note,
         }
       }
       if (mIsRecording && mIsPlaying && !isSequencerTrigger) {
+        std::lock_guard<std::recursive_mutex> recordedLock(mRecordedStepLock);
         for (auto it = track.mRecordingNotes.begin();
              it != track.mRecordingNotes.end();) {
           if (it->note == note) {
@@ -2001,13 +2017,14 @@ void AudioEngineCore::releaseNoteLocked(int trackIndex, int note,
             if (gate > 64.0f)
               gate = 64.0f; // Max 64 steps in v2.2.1
 
-            if (it->drumIdx >= 0 && it->drumIdx < 8) {
-              track.drumSequencers[it->drumIdx]
-                  .getStepsMutable()[it->stepIndex]
-                  .gate = gate;
-            } else {
-              track.sequencer.getStepsMutable()[it->stepIndex].gate = gate;
+            Step &recordedStep = it->drumIdx >= 0 && it->drumIdx < 16
+                ? track.drumSequencers[it->drumIdx].getStepsMutable()[it->stepIndex]
+                : track.sequencer.getStepsMutable()[it->stepIndex];
+            recordedStep.gate = gate;
+            for (auto &recordedNote : recordedStep.notes) {
+              if (recordedNote.note == note) recordedNote.gate = gate;
             }
+            markRecordedStepDirty(trackIndex, it->drumIdx, it->stepIndex);
             it = track.mRecordingNotes.erase(it);
           } else {
             ++it;
@@ -2167,6 +2184,7 @@ void AudioEngineCore::render(float *audioData, int32_t numFrames) {
                   !mIsRecording); // If recording, even empty slots are fine!
 
               if (nextSlot != track.currentChainSlot) {
+                std::lock_guard<std::recursive_mutex> recordedLock(mRecordedStepLock);
                 track.currentChainSlot = nextSlot;
                 const auto &slot = track.chainSlots[track.currentChainSlot];
                 track.sequencer.setSteps(slot.steps);
@@ -2226,7 +2244,8 @@ void AudioEngineCore::render(float *audioData, int32_t numFrames) {
                         randomOffset;
 
                     float ratchetedGate =
-                        s.gate / static_cast<float>(s.ratchet);
+                        (ni.gate >= 0.0f ? ni.gate : s.gate) /
+                        static_cast<float>(s.ratchet);
 
                     // Apply velocity scaling
                     int vel =
@@ -2336,7 +2355,8 @@ void AudioEngineCore::render(float *audioData, int32_t numFrames) {
                             randomOffset;
 
                         float ratchetedGate =
-                            ds.gate / static_cast<float>(ds.ratchet);
+                            (ni.gate >= 0.0f ? ni.gate : ds.gate) /
+                            static_cast<float>(ds.ratchet);
 
                         int vel = static_cast<int>(ni.velocity * 127.0f *
                                                    velocityScale);
@@ -2628,7 +2648,29 @@ void AudioEngineCore::setStep(int trackIndex, int stepIndex, bool active,
                           int ratchet, bool punch, float probability,
                           float gate, bool isSkipped, float subStepOffset,
                           const std::vector<float> &noteOffsets,
-                          const std::vector<float> &noteVelocities) {
+                          const std::vector<float> &noteVelocities,
+                          const std::vector<float> &noteGates,
+                          const std::map<int, float> *parameterLocks) {
+  if (trackIndex < 0 || trackIndex >= static_cast<int>(mTracks.size()) ||
+      stepIndex < 0 || stepIndex >= 64 ||
+      !std::isfinite(velocity) || !std::isfinite(probability) ||
+      !std::isfinite(gate) || !std::isfinite(subStepOffset) ||
+      noteOffsets.size() > notes.size() ||
+      noteVelocities.size() > notes.size() ||
+      noteGates.size() > notes.size() ||
+      !std::all_of(noteOffsets.begin(), noteOffsets.end(), [](float value) {
+        return std::isfinite(value) && value >= 0.0f && value <= 1.0f;
+      }) ||
+      !std::all_of(noteVelocities.begin(), noteVelocities.end(), [](float value) {
+        return std::isfinite(value) && value >= 0.0f && value <= 1.0f;
+      }) ||
+      !std::all_of(noteGates.begin(), noteGates.end(), [](float value) {
+        return std::isfinite(value) && value >= 0.01f && value <= 64.0f;
+      }) ||
+      (parameterLocks && !std::all_of(parameterLocks->begin(), parameterLocks->end(),
+        [](const auto &entry) { return entry.first >= 0 && entry.first < 2500 &&
+          std::isfinite(entry.second); })))
+    return;
   AudioCommand cmd;
   cmd.type = AudioCommand::SET_STEP;
   cmd.trackIndex = trackIndex;
@@ -2644,6 +2686,11 @@ void AudioEngineCore::setStep(int trackIndex, int stepIndex, bool active,
   cmd.subStepOffset = subStepOffset;
   cmd.noteOffsets = noteOffsets;
   cmd.noteVelocities = noteVelocities;
+  cmd.noteGates = noteGates;
+  if (parameterLocks) {
+    cmd.parameterLocks = *parameterLocks;
+    cmd.hasParameterLocks = true;
+  }
 
   std::lock_guard<std::mutex> lock(mCommandLock);
   mCommandQueue.push_back(cmd);
@@ -2668,22 +2715,13 @@ void AudioEngineCore::getFxMix(int trackIndex, float *dest) {
 }
 
 std::vector<float> AudioEngineCore::getAllTrackParameters(int trackIndex) {
-  std::vector<float> params;
-  params.reserve(1024);
-  
-  if (trackIndex >= 0 && trackIndex < 8) {
-      // Use Snapshot Lock (faster than mLock)
-      std::unique_lock<std::mutex> lock(mSnapshotLock, std::try_to_lock);
-      // Even if lock fails, we return a vector (either zeroed or from snapshot if we got it)
-      // Actually, let's just wait for mSnapshotLock since it's extremely fast (just a copy)
-      if (!lock.owns_lock()) lock.lock(); 
-      
-      for (int i = 0; i < 1024; ++i) {
-        params.push_back(mUISnapshot.tracks[trackIndex].parameters[i]);
-      }
-  } else {
-      params.resize(1024, 0.0f);
-  }
+  if (trackIndex < 0 || trackIndex >= 8) return {};
+  std::lock_guard<std::mutex> commandLock(mCommandLock);
+  if (!mCommandQueue.empty() || !mUISnapshotReady.load()) return {};
+  std::lock_guard<std::mutex> snapshotLock(mSnapshotLock);
+  if (!mUISnapshotReady.load()) return {};
+  const auto &snap = mUISnapshot.tracks[trackIndex];
+  std::vector<float> params(snap.parameters, snap.parameters + 1024);
   return params;
 }
 
@@ -2715,6 +2753,8 @@ void AudioEngineCore::setTempo(float bpm) {
 
 void AudioEngineCore::setPlaying(bool playing) {
   std::lock_guard<std::recursive_mutex> lock(mLock);
+  // Finalize held recording gates before STOP resets the transport clock.
+  if (!playing && mIsRecording.load()) setIsRecording(false);
   mIsPlaying = playing;
   if (!playing) {
     mSampleCount = 0;
@@ -3037,14 +3077,96 @@ void AudioEngineCore::applyModulations() {
 
 void AudioEngineCore::setIsRecording(bool isRecording) {
   std::lock_guard<std::recursive_mutex> lock(mLock);
+  std::lock_guard<std::recursive_mutex> recordedLock(mRecordedStepLock);
   if (!isRecording && mIsRecording.load()) {
-    // Flush all in-flight recording notes to prevent orphaned entries
-    // that would cause duplicate writes on the next recording pass.
-    for (auto &track : mTracks) {
+    for (int t = 0; t < (int)mTracks.size(); ++t) {
+      auto &track = mTracks[t];
+      const double currentPos = (double)mGlobalStepIndex +
+          mSampleCount.load() / (mSamplesPerStep.load() + 0.001);
+      for (const auto &held : track.mRecordingNotes) {
+        double elapsed = currentPos - ((double)held.startGlobalStep + held.startOffset);
+        if (elapsed < 0) elapsed += 4096.0;
+        const float gate = std::max(0.1f, std::min(64.0f, (float)elapsed));
+        Step &step = held.drumIdx >= 0 && held.drumIdx < 16
+            ? track.drumSequencers[held.drumIdx].getStepsMutable()[held.stepIndex]
+            : track.sequencer.getStepsMutable()[held.stepIndex];
+        step.gate = gate;
+        for (auto &note : step.notes) {
+          if (note.note == held.note) note.gate = gate;
+        }
+        markRecordedStepDirty(t, held.drumIdx, held.stepIndex);
+      }
       track.mRecordingNotes.clear();
     }
   }
   mIsRecording = isRecording;
+}
+
+void AudioEngineCore::markRecordedStepDirty(int trackIndex, int drumIndex,
+                                            int stepIndex) {
+  if (trackIndex >= 0 && trackIndex < 8 && drumIndex >= -1 &&
+      drumIndex < 16 && stepIndex >= 0 && stepIndex < 64) {
+    mRecordedStepDirty[trackIndex][drumIndex + 1].set(stepIndex);
+  }
+}
+
+std::vector<float> AudioEngineCore::drainRecordedSteps() {
+  struct PendingGate { int note; float gate; };
+  struct ChangedStep {
+    int track, lane, index;
+    bool active;
+    float gate;
+    std::vector<Step::NoteInfo> notes;
+    std::vector<PendingGate> pending;
+  };
+  std::vector<ChangedStep> changed;
+  {
+    std::lock_guard<std::recursive_mutex> lock(mRecordedStepLock);
+    for (int t = 0; t < (int)mTracks.size() && t < 8; ++t) {
+      const auto &heldNotes = mTracks[t].mRecordingNotes;
+      for (const auto &held : heldNotes)
+        markRecordedStepDirty(t, held.drumIdx, held.stepIndex);
+      for (int lane = 0; lane < 17; ++lane) {
+        auto &dirty = mRecordedStepDirty[t][lane];
+        if (dirty.none()) continue;
+        const auto &steps = lane == 0 ? mTracks[t].sequencer.getSteps()
+            : mTracks[t].drumSequencers[lane - 1].getSteps();
+        for (int i = 0; i < 64 && i < (int)steps.size(); ++i) {
+          if (!dirty.test(i)) continue;
+          const Step &step = steps[i];
+          ChangedStep snapshot{t, lane - 1, i, step.active, step.gate,
+                               step.notes, {}};
+          for (const auto &held : heldNotes) {
+            if (held.stepIndex != i || held.drumIdx != lane - 1) continue;
+            double elapsed = (double)mGlobalStepIndex +
+                mSampleCount.load() / (mSamplesPerStep.load() + 0.001) -
+                ((double)held.startGlobalStep + held.startOffset);
+            if (elapsed < 0) elapsed += 4096.0;
+            snapshot.pending.push_back({held.note,
+                std::max(0.1f, std::min(64.0f, (float)elapsed))});
+          }
+          changed.push_back(std::move(snapshot));
+        }
+        dirty.reset();
+      }
+    }
+  }
+  std::vector<float> result;
+  for (const auto &step : changed) {
+    float sharedGate = step.pending.empty() ? step.gate : step.pending.back().gate;
+    result.insert(result.end(), {(float)step.track, (float)step.lane,
+        (float)step.index, step.active ? 1.0f : 0.0f,
+        sharedGate, (float)step.notes.size()});
+    for (const auto &note : step.notes) {
+      float noteGate = note.gate;
+      for (const auto &held : step.pending) {
+        if (held.note == note.note) { noteGate = held.gate; break; }
+      }
+      result.insert(result.end(), {(float)note.note, note.velocity,
+          note.subStepOffset, noteGate});
+    }
+  }
+  return result;
 }
 
 void AudioEngineCore::jumpToStep(int stepIndex) {
@@ -3548,6 +3670,7 @@ void AudioEngineCore::setSoundFontMapping(int trackIndex, int knobIndex,
 
 void AudioEngineCore::clearSequencer(int trackIndex) {
   std::lock_guard<std::recursive_mutex> lock(mLock);
+  std::lock_guard<std::recursive_mutex> recordedLock(mRecordedStepLock);
   if (trackIndex >= 0 && trackIndex < mTracks.size()) {
     mTracks[trackIndex].sequencer.clear();
     for (int i = 0; i < 16; ++i) {
@@ -4671,20 +4794,18 @@ void AudioEngineCore::loadDefaultWavetable(int trackIndex) {
   }
 }
 
-void AudioEngineCore::getStepActiveStates(int trackIndex, bool *out, int maxSize) {
-  if (trackIndex < 0 || trackIndex >= 8) {
-    if (out) std::fill(out, out + maxSize, false);
-    return;
-  }
-
-  std::unique_lock<std::mutex> lock(mSnapshotLock, std::try_to_lock);
-  if (!lock.owns_lock()) lock.lock();
-
+bool AudioEngineCore::getStepActiveStates(int trackIndex, bool *out, int maxSize) {
+  if (trackIndex < 0 || trackIndex >= 8 || !out || maxSize <= 0) return false;
+  std::lock_guard<std::mutex> commandLock(mCommandLock);
+  if (!mCommandQueue.empty() || !mUISnapshotReady.load()) return false;
+  std::lock_guard<std::mutex> snapshotLock(mSnapshotLock);
+  if (!mUISnapshotReady.load()) return false;
   const auto &snap = mUISnapshot.tracks[trackIndex];
   int limit = std::min(maxSize, 64);
   for (int i = 0; i < limit; ++i) {
     out[i] = snap.activeSteps.test(i);
   }
+  return true;
 }
 void AudioEngineCore::setInputDevice(int deviceId) {
   // Platform-specific implementation required in the driver (e.g. MacAudioEngine or OboeAudioEngine)
@@ -4876,8 +4997,6 @@ void AudioEngineCore::updateUISnapshot() {
   mUISnapshot.isRecording = mIsRecording.load();
   mUISnapshot.masterVolume = mMasterVolume.load();
 
-  int focusedIdx = mFocusedTrackIndex.load();
-
   for (int i = 0; i < 8 && i < (int)mTracks.size(); ++i) {
     Track &track = mTracks[i];
     auto &snap = mUISnapshot.tracks[i];
@@ -4885,34 +5004,22 @@ void AudioEngineCore::updateUISnapshot() {
     // Always update track levels for activity highlights (fast)
     mUISnapshot.trackLevels[i] = track.follower.getLevel();
     
-    // Only perform heavy copies for the track the user is actually looking at
-    if (i == focusedIdx) {
-      // Sync playhead (wait-free)
-      snap.currentStep = track.sequencer.getCurrentStepIndex();
-
-      // Copy parameters (limit to 1024)
-      std::memcpy(snap.parameters, track.parameters, sizeof(float) * 1024);
-      
-      // Sync sequencer active states
-      const auto &steps = track.sequencer.getSteps();
-      for(int s=0; s<64 && s<(int)steps.size(); ++s) {
-          snap.activeSteps.set(s, steps[s].active);
+    snap.currentStep = track.sequencer.getCurrentStepIndex();
+    std::memcpy(snap.parameters, track.parameters, sizeof(float) * 1024);
+    const auto &steps = track.sequencer.getSteps();
+    for(int s=0; s<64 && s<(int)steps.size(); ++s) {
+        snap.activeSteps.set(s, steps[s].active);
+    }
+    if (track.engineType == 5 || track.engineType == 6) {
+      for(int d=0; d<16; ++d) {
+          const auto &dsteps = track.drumSequencers[d].getSteps();
+          for(int s=0; s<64 && s<(int)dsteps.size(); ++s) {
+              snap.activeDrumSteps[d].set(s, dsteps[s].active);
+          }
       }
-      
-      // Sync Drum Sequencer active states (only if it's a drum engine)
-      if (track.engineType == 5 || track.engineType == 6) {
-        for(int d=0; d<16; ++d) {
-            const auto &dsteps = track.drumSequencers[d].getSteps();
-            for(int s=0; s<64 && s<(int)dsteps.size(); ++s) {
-                snap.activeDrumSteps[d].set(s, dsteps[s].active);
-            }
-        }
-      }
-    } else {
-        // Just sync playhead for other tracks (cheap)
-        snap.currentStep = track.sequencer.getCurrentStepIndex();
     }
   }
+  mUISnapshotReady.store(true);
 }
 
 void AudioEngineCore::setChainEnabled(int trackIndex, bool enabled) {

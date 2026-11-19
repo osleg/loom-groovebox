@@ -14,6 +14,6 @@ class AudioStream { public:
 };
 class AudioStreamBuilder { AudioStream value; public:
  void setDirection(Direction x){value.direction=x;} void setPerformanceMode(PerformanceMode){} void setSharingMode(SharingMode){} void setFormat(AudioFormat){} void setChannelCount(int x){value.channels=x;} void setSampleRate(int x){value.rate=x;} void setCallback(AudioStreamCallback*){} void setInputPreset(InputPreset){} void setAudioApi(AudioApi x){value.api=x;} void setDeviceId(int x){value.device=x;}
- Result openStream(std::shared_ptr<AudioStream>& s){if(failOpen)return Result::ErrorDisconnected; s=std::make_shared<AudioStream>(value); if(s->direction==Direction::Output){if(wrongDevice)s->device=1;if(wrongRate)s->rate=48000;lastOutput=s.get();}return Result::OK;}
+ Result openStream(std::shared_ptr<AudioStream>& s){if(failOpen)return Result::ErrorDisconnected; s=std::make_shared<AudioStream>(value); if(s->direction==Direction::Output){if(wrongDevice)s->device=1;if(wrongRate)s->rate=(s->rate==48000?44100:48000);lastOutput=s.get();}return Result::OK;}
 };
 }

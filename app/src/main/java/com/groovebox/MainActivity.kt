@@ -43,7 +43,6 @@ import androidx.core.view.WindowInsetsControllerCompat
 import com.groovebox.utils.*
 import android.media.projection.MediaProjectionManager
 import android.media.projection.MediaProjection
-import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import android.media.AudioFormat
 import android.media.AudioRecord
@@ -79,7 +78,6 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import com.groovebox.midi.EmpledManager
 import com.groovebox.midi.MidiManager
-import com.groovebox.midi.MidiRouter
 import com.groovebox.midi.MidiCommand
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.LocalConfiguration
@@ -117,16 +115,13 @@ import com.groovebox.ui.components.VerticalScrollbar
 
 
 class MainActivity : ComponentActivity() {
-    private var cafaConnection: com.groovebox.cafa.CafaConnection? = null
+    private val runtime by lazy { LoomRuntime.from(this) }
     private lateinit var performanceManager: AudioPerformanceManager
-    private val nativeLib = NativeLib()
-    private lateinit var midiManager: MidiManager
-    private lateinit var midiRouter: MidiRouter
-    private lateinit var empledManager: EmpledManager
-    private var grooveboxState by mutableStateOf(createInitialState())
-    private var isNativeInitialized by mutableStateOf(false)
-    private var splashScreenStatus by mutableStateOf("Initializing...")
-    private lateinit var viewModel: GrooveboxViewModel
+    private val nativeLib get() = runtime.native
+    private val viewModel get() = checkNotNull(runtime.session).model
+    private var grooveboxState: GrooveboxState
+        get() = viewModel.state
+        set(value) = viewModel.onStateChange(value)
     private val heldKeys = mutableSetOf<Int>()
 
 
@@ -141,48 +136,18 @@ class MainActivity : ComponentActivity() {
             ContextCompat.startForegroundService(this, intent)
         } else {
             // Revert recording source to MIC if denied
-            grooveboxState = grooveboxState.copy(recordingSource = 0)
-            nativeLib.setRecordingSource(0)
+            runtime.session?.model?.let {
+                it.onStateChange(it.state.copy(recordingSource = 0))
+                nativeLib.setRecordingSource(0)
+            }
             Toast.makeText(this, "System Audio Capture Permission Denied", Toast.LENGTH_SHORT).show()
         }
     }
 
-    private fun createInitialState(): GrooveboxState {
-        val tracks = List(8) { i ->
-            when(i) {
-                0 -> TrackState(id = i, engineType = EngineType.SUBTRACTIVE)
-                1 -> {
-                    val fmParams = mutableMapOf<Int, Float>()
-                    // Bell defaults moved to Track 2
-                    fmParams[160] = 0.8f // Op 1 Lvl
-                    fmParams[166] = 0.4f // Op 2 Lvl
-                    fmParams[165] = 1.0f // Op 1 Ratio
-                    fmParams[171] = 2.0f // Op 2 Ratio
-                    fmParams[161] = 0.01f // Op 1 Atk
-                    fmParams[162] = 0.5f // Op 1 Dcy
-                    fmParams[9] = 0.5f   // Center Pan
-                    TrackState(id = i, engineType = EngineType.FM, parameters = fmParams, fmCarrierMask = 3, pan = 0.5f)
-                }
-                2 -> TrackState(id = i, engineType = EngineType.WAVETABLE)
-                3 -> TrackState(id = i, engineType = EngineType.SAMPLER)
-                4 -> TrackState(id = i, engineType = EngineType.GRANULAR)
-                5 -> TrackState(id = i, engineType = EngineType.FM_DRUM)
-                6 -> TrackState(id = i, engineType = EngineType.ANALOG_DRUM)
-                7 -> TrackState(id = i, engineType = EngineType.MIDI)
-                else -> TrackState(id = i, engineType = EngineType.SUBTRACTIVE)
-            }
-        }
-        
-        return GrooveboxState(tracks = tracks, tempo = 80.0f)
-    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        PersistenceManager.setContext(this)
-        com.groovebox.midi.MidiConfigStore.load()
         mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         
-        // Prevent Tablet Idle Crash by keeping screen on
-        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         // Use WindowInsetsControllerCompat to properly hide the Android menubar
         WindowCompat.setDecorFitsSystemWindows(window, false)
@@ -191,7 +156,6 @@ class MainActivity : ComponentActivity() {
         // DEFERRED: performanceManager.startSession() moved to lazy UI loop 
         // to prevent boot-time crash loop on Pixel 10.
 
-        nativeLib.setAppDataDir(getExternalFilesDir(null)?.absolutePath ?: filesDir.absolutePath)
         
         WindowInsetsControllerCompat(window, window.decorView).let { controller ->
             controller.hide(WindowInsetsCompat.Type.systemBars())
@@ -202,6 +166,7 @@ class MainActivity : ComponentActivity() {
         val perms = mutableListOf<String>()
         if (Build.VERSION.SDK_INT >= 33) {
             perms.add(Manifest.permission.READ_MEDIA_AUDIO)
+            perms.add(Manifest.permission.POST_NOTIFICATIONS)
         } else if (Build.VERSION.SDK_INT <= 32) {
              perms.add(Manifest.permission.READ_EXTERNAL_STORAGE)
              perms.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
@@ -217,133 +182,16 @@ class MainActivity : ComponentActivity() {
             ActivityCompat.requestPermissions(this, permissionsToRequest.toTypedArray(), 1001)
         }
         
-        // Background Initialization for Assets
-        lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                withContext(Dispatchers.Main) { splashScreenStatus = "Copying Assets..." }
-                
-                try {
-                    PersistenceManager.migrateToExternalStorage()
-                    PersistenceManager.copyWavetablesToFilesDir()
-                    PersistenceManager.copySoundFontsToFilesDir()
-                    PersistenceManager.copyDefaultsToFilesDir()
-                } catch (e: Exception) {
-                    Log.e("Groovebox", "Persistence startup error: ${e.message}")
-                }
-                
-                withContext(Dispatchers.Main) { splashScreenStatus = "Loading Session Data..." }
-                val prefs = getSharedPreferences("GrooveboxPrefs", Context.MODE_PRIVATE)
-                val crashedLastLaunch = prefs.getBoolean("crashed_on_launch", false)
-                prefs.edit().putBoolean("crashed_on_launch", true).apply()
-                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                    prefs.edit().putBoolean("crashed_on_launch", false).apply()
-                }, 10000)
-
-                var loadedState: GrooveboxState? = null
-                if (crashedLastLaunch) {
-                    Log.e("Groovebox", "CRASH LOOP DETECTED! Resetting to Fresh State.")
-                    withContext(Dispatchers.Main) {
-                        android.widget.Toast.makeText(this@MainActivity, "Safe Mode: Settings Reset due to Crash", android.widget.Toast.LENGTH_LONG).show()
-                    }
-                    loadedState = createInitialState()
-                    PersistenceManager.saveProject(loadedState, "last_session.gbx")
-                } else {
-                    try {
-                        val initProject = PersistenceManager.loadProject("Init.gbx")
-                        val lastSession = PersistenceManager.loadProject("last_session.gbx")
-                        loadedState = if (initProject == null) {
-                            val fresh = createInitialState()
-                            PersistenceManager.saveProject(fresh, "Init.gbx")
-                            fresh
-                        } else {
-                            initProject ?: lastSession
-                        }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                        loadedState = createInitialState()
-                    }
-                }
-
-                withContext(Dispatchers.Main) {
-                    viewModel = GrooveboxViewModel(nativeLib, lifecycleScope)
-                    loadedState?.let { viewModel.sanitizeAndSetState(it) }
-                    grooveboxState = viewModel.state
-                }
-                withContext(Dispatchers.Main) { splashScreenStatus = "Initializing Audio Engine..." }
-                nativeLib.init()
-                com.groovebox.cafa.CafaConnection.applyInitialRoute(this@MainActivity, nativeLib)
-                nativeLib.setAppDataDir(filesDir.absolutePath)
-                
-                withContext(Dispatchers.Main) { splashScreenStatus = "Restoring Sample Paths..." }
-                nativeLib.loadAppState()
-
-                var finalState = sanitizeGrooveboxState(loadedState ?: createInitialState())
-
-                withContext(Dispatchers.Main) { splashScreenStatus = "Clearing Sequencer Buffers..." }
-                for (i in 0 until 8) { nativeLib.clearSequencer(i) }
-
-                withContext(Dispatchers.Main) { splashScreenStatus = "Syncing State to Native Engine..." }
-                // CRITICAL ORDER: SoundFont loading must complete before audio streams start.
-                // syncNativeState calls loadSoundFont() which holds C++ mutexes for 30MB file parses.
-                // If nativeLib.start() is called first, the Oboe RT thread contends on those
-                // mutexes and Android priority-inheritance escalates to ANR the main thread.
-                syncNativeState(finalState, nativeLib)
-
-                withContext(Dispatchers.Main) { splashScreenStatus = "Starting Audio Streams..." }
-                nativeLib.start()
-
-                withContext(Dispatchers.Main) { splashScreenStatus = "Finalizing..." }
-                val initialTracks = finalState.tracks.mapIndexed { i, t ->
-                    t.copy(lastSamplePath = nativeLib.getLastSamplePath(i))
-                }
-                finalState = finalState.copy(tracks = initialTracks)
-
-                withContext(Dispatchers.Main) {
-                    grooveboxState = finalState
-                }
-            } catch (e: Throwable) {
-                Log.e("Groovebox", "FATAL: Background init failed: ${e.message}", e)
-                // Even on catastrophic failure, unblock the UI with a safe fresh state
-                withContext(Dispatchers.Main) {
-                    splashScreenStatus = "Init Error: ${e.message?.take(80)}"
-                    // Give user 3 seconds to read error then load with empty state
-                    kotlinx.coroutines.delay(3000)
-                    grooveboxState = createInitialState()
-                }
-            }
-            withContext(Dispatchers.Main) {
-                // A failure above may have happened before the ViewModel existed.
-                if (!this@MainActivity::viewModel.isInitialized) {
-                    viewModel = GrooveboxViewModel(nativeLib, lifecycleScope)
-                    grooveboxState = viewModel.state
-                }
-                splashScreenStatus = "Connecting MIDI..."
-                // Init MIDI on Main thread (required by Android MIDI API for callbacks)
-                // but only AFTER the audio engine is ready so it doesn't race with IO init.
-                midiRouter = viewModel.midiRouter
-                midiManager = MidiManager(this@MainActivity) { message, deviceId ->
-                    viewModel.processMidiMessage(message, deviceId)
-                }
-                viewModel.midiRouter.setMidiSender(midiManager::sendMidi)
-                viewModel.attachMidiManager(midiManager)
-                empledManager = EmpledManager(midiManager)
-                empledManager.sendHandshake()
-                cafaConnection = com.groovebox.cafa.CafaConnection(this@MainActivity, nativeLib, viewModel, midiManager)
-
-                // KEEP STATE IN SYNC WITH VIEWMODEL
-                lifecycleScope.launch {
-                    snapshotFlow { viewModel.state }.collect {
-                        grooveboxState = it
-                    }
-                }
-
-                // Only now can the UI be composed: MainScreen reads every one of
-                // these lateinit fields as arguments.
-                isNativeInitialized = true
-            }
-        }
+        runtime.attachUi()
 
         setContent {
+            val session = runtime.session
+            val playbackHeld = runtime.playbackHeld
+            DisposableEffect(playbackHeld) {
+                val flag = android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+                if (playbackHeld) window.clearFlags(flag) else window.addFlags(flag)
+                onDispose { window.clearFlags(flag) }
+            }
             val config = LocalConfiguration.current
             val platformInfo = remember(config) {
                 PlatformInfo(
@@ -363,28 +211,33 @@ class MainActivity : ComponentActivity() {
             CompositionLocalProvider(LocalPlatformInfo provides platformInfo) {
                 GrooveboxTheme {
                     Box(modifier = Modifier.fillMaxSize()) {
-                        if (isNativeInitialized) {
+                        if (session != null) {
                             Column(Modifier.fillMaxSize()) {
-                                cafaConnection?.let { com.groovebox.cafa.CafaPanel(it) }
+                                com.groovebox.cafa.CafaPanel(session.connection) { midi, output, mode ->
+                                    try {
+                                        LoomPlaybackService.start(this@MainActivity, midi, output, mode)
+                                    } catch (e: Exception) {
+                                        session.connection.disconnect("Could not start FM-1 playback: ${e.message}")
+                                    }
+                                }
                                 Box(Modifier.weight(1f)) {
-                                    MainScreen(performanceManager, empledManager, nativeLib, viewModel, midiManager, onRecordingSourceChange = ::handleRecordingSourceChange) { viewModel.onStateChange(it) }
+                                    MainScreen(performanceManager, session.leds, nativeLib, session.model, session.midi, onRecordingSourceChange = ::handleRecordingSourceChange, onStateChange = session.model::onStateChange)
                                 }
                             }
-                            
-                            // RETRY HANDSHAKE after UI load
-                            LaunchedEffect(Unit) {
-                                delay(1000)
-                                Log.e("Groovebox", "@@@ RETRY HANDSHAKE (1s delay)")
-                                empledManager.sendHandshake()
-                            }
                         }
-                        
 
                         AnimatedVisibility(
-                            visible = !(splashtimeElapsed && isNativeInitialized),
+                            visible = !(splashtimeElapsed && session != null),
                             exit = fadeOut(animationSpec = tween(1000))
                         ) {
-                            SplashScreen(splashScreenStatus)
+                            Box(Modifier.fillMaxSize()) {
+                                SplashScreen(runtime.status)
+                                if (runtime.startupFailed) {
+                                    Button(onClick = runtime::retry, modifier = Modifier.align(Alignment.BottomCenter)) {
+                                        Text("Retry audio startup")
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -394,17 +247,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Ensure audio engine is explicitly resumed/started if it was closed or suspended
-        nativeLib.start()
+        val ready = runtime.session ?: return
+        if (!runtime.playbackHeld && !ready.connection.routeHeld) nativeLib.start()
     }
 
     override fun onPause() {
         super.onPause()
-        // A runtime permission dialog pauses the activity before the background
-        // initialisation has assigned viewModel, so this can run very early.
-        if (this::viewModel.isInitialized) {
-            PersistenceManager.saveProject(viewModel.state, "last_session.gbx")
-        }
+        runtime.save()
     }
 
     private fun stopLoopbackCapture() {
@@ -430,15 +279,17 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        cafaConnection?.close()
+        runtime.session?.model?.let { model ->
+            heldKeys.mapNotNull(::getPadIndexFromKeyCode).forEach(model::releasePad)
+        }
+        heldKeys.clear()
         stopLoopbackCapture()
+        runtime.releaseUi()
         super.onDestroy()
-        nativeLib.stop()
-        if (this::midiManager.isInitialized) midiManager.close()
     }
 
     override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent): Boolean {
-        if (!this::viewModel.isInitialized) return super.onKeyDown(keyCode, event)
+        if (runtime.session == null) return super.onKeyDown(keyCode, event)
         // ALWAYS use the ViewModel state directly for input handling to avoid stale state issues
         val currentState = viewModel.state
         if (!currentState.isKeyboardModeEnabled) return super.onKeyDown(keyCode, event)
@@ -507,7 +358,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onKeyUp(keyCode: Int, event: android.view.KeyEvent): Boolean {
-        if (!this::viewModel.isInitialized) return super.onKeyUp(keyCode, event)
+        if (runtime.session == null) return super.onKeyUp(keyCode, event)
         val currentState = viewModel.state
         if (!currentState.isKeyboardModeEnabled) return super.onKeyUp(keyCode, event)
         
@@ -685,44 +536,10 @@ fun MainScreen(
         }
     }
 
-    // Initial state sync with Native
-    // Initial state sync with Native (FULL FETCH)
-    LaunchedEffect(Unit) {
-        // 1. Push critical Globals to Native first
-        state.tracks.forEachIndexed { i, track ->
-            nativeLib.setEngineType(i, track.engineType.ordinal)
-            if (track.engineType == EngineType.WAVETABLE && (track.activeWavetableName ?: "Basic") != "Basic") {
-                 // Try to reload wavetable if path known
-                 // nativeLib.loadWavetable(i, ...) - requires path logic, skipping for now to rely on native persistence
-            }
-        }
-        nativeLib.setTempo(state.tempo)
-        
-        // 2. FETCH real state from Native (Knobs & Steps)
-        val syncedTracks = state.tracks.mapIndexed { idx, track ->
-            // A. Parameters
-            val paramArray = nativeLib.getAllTrackParameters(idx)
-            val newParams = paramArray.mapIndexed { pid, value -> pid to value }.toMap()
-            
-            // B. Sequencer Steps (Active State)
-            val activeSteps = nativeLib.getAllStepActiveStates(idx)
-            val newSteps = track.steps.mapIndexed { si, step ->
-                if (si < activeSteps.size) step.copy(active = activeSteps[si]) else step
-            }
-            
-            // C. Drum Steps (if applicable) - For now, Native only returns MAIN sequencer active states. 
-            // If we have time, we should expand native-lib to handle drum voices, but checking 0-127 is a good start.
-            // (Assuming activeSteps covers the main sequencer mapping).
-            
-            // C. FX Parameters (Sends & Mix) - CRITICAL FIX for FX Knob Sync
-            val fxSends = nativeLib.getFxSends(idx).toList()
-            val fxMix = nativeLib.getFxMix(idx).toList()
-            
-            track.copy(parameters = newParams, steps = newSteps, fxSends = fxSends, fxMix = fxMix)
-        }
-        
-        onStateChange(state.copy(tracks = syncedTracks))
-    }
+    // Startup already pushes the restored project through syncNativeState.
+    // Keep that model authoritative: audio may be held until an explicit route
+    // is selected, so a native snapshot may not exist yet. Normal polling only
+    // merges snapshots once the engine has applied and published its state.
 
     LaunchedEffect(state.isParameterLocking, state.isRecording, state.midiLearnStep, state.isSelectingSidechain) {
         if (state.isParameterLocking) {
@@ -878,85 +695,6 @@ fun MainScreen(
     // A second pump here used to read the same events with a stale 4-int
     // stride, duplicating and corrupting note output on Android.
 
-    // Poll sequencer steps during recording to ensure UI sync
-    LaunchedEffect(state.isRecording, state.selectedTrackIndex, state.currentSequencerBank) {
-        if (state.isRecording) {
-            while (true) {
-                val bankOffset = latestState.currentSequencerBank * 16
-                var stateNeedsUpdate = false
-                val updatedTracks = latestState.tracks.mapIndexed { tIdx, t ->
-                    if (tIdx == latestState.selectedTrackIndex) {
-                        val isDrum = t.engineType == EngineType.FM_DRUM
-                        val nativeStates = nativeLib.getAllStepActiveStates(tIdx)
-                        if (nativeStates.isEmpty()) return@mapIndexed t
-
-                        if (isDrum) {
-                            val instIdx = t.selectedFmDrumInstrument
-                            val newDrumStepsList = t.drumSteps.mapIndexed { di, dsteps ->
-                                if (di == instIdx) {
-                                    var drumChanged = false
-                                    val newSteps = dsteps.mapIndexed { si, s ->
-                                        if (si < nativeStates.size) {
-                                            val nativeActive = nativeStates[si]
-                                            if (nativeActive) {
-                                                val nativeNotes = nativeLib.getStepNotes(tIdx, si, di).toList()
-                                                val nativeVel = nativeLib.getStepVelocity(tIdx, si, di)
-                                                
-                                                if (nativeActive != s.active || nativeNotes != s.notes || Math.abs(nativeVel - s.velocity) > 0.01f) {
-                                                    drumChanged = true
-                                                    s.copy(active = nativeActive, notes = nativeNotes, velocity = nativeVel)
-                                                } else s
-                                            } else {
-                                                if (s.active) {
-                                                    drumChanged = true
-                                                    s.copy(active = false)
-                                                } else s
-                                            }
-                                        } else s
-                                    }
-                                    if (drumChanged) stateNeedsUpdate = true
-                                    newSteps
-                                } else dsteps
-                            }
-                            t.copy(drumSteps = newDrumStepsList)
-                        } else {
-                            var trackChanged = false
-                            val newSteps = t.steps.mapIndexed { si, s ->
-                                if (si < nativeStates.size) {
-                                    val nativeActive = nativeStates[si]
-                                    if (nativeActive) {
-                                        // Pull recorded data from engine
-                                        // Pull recorded data from engine
-                                        val nativeNotes = nativeLib.getStepNotes(tIdx, si).toList()
-                                        val nativeVel = nativeLib.getStepVelocity(tIdx, si)
-                                        val nativeSub = nativeLib.getStepSubStep(tIdx, si)
-                                        
-                                        if (nativeActive != s.active || nativeNotes != s.notes || Math.abs(nativeVel - s.velocity) > 0.01f) {
-                                            trackChanged = true
-                                            s.copy(active = nativeActive, notes = nativeNotes, velocity = nativeVel, subStepOffset = nativeSub)
-                                        } else s
-                                    } else {
-                                        if (s.active) {
-                                            trackChanged = true
-                                            s.copy(active = false)
-                                        } else s
-                                    }
-                                } else s
-                            }
-                            if (trackChanged) stateNeedsUpdate = true
-                            t.copy(steps = newSteps)
-                        }
-                    } else t
-                }
-                
-                if (stateNeedsUpdate) {
-                    latestOnStateChange(latestState.copy(tracks = updatedTracks))
-                }
-                kotlinx.coroutines.delay(100)
-            }
-        }
-    }
-
     // Dynamic Pattern Length Calculation
     LaunchedEffect(state.tracks, state.currentSequencerBank) {
         var maxUsedStep = 15 // Default 16 steps
@@ -1022,7 +760,7 @@ fun MainScreen(
                 2 -> SequencerView(viewModel, nativeLib, empledManager)
                 3 -> GlobalEffectsView(state, onStateChange, nativeLib)
                 4 -> RoutingScreen(state, onStateChange, nativeLib)
-                5 -> SettingsScreen(state, onStateChange, nativeLib, midiManager)
+                5 -> SettingsScreen(state, onStateChange, nativeLib, midiManager, stateForSave = { viewModel.drainRecordedSteps(); viewModel.state })
             }
             
             if (state.showCpuMonitor) {
@@ -1110,7 +848,7 @@ fun MainScreen(
             ) {
                 // Transport Column
                 Box(modifier = Modifier.width(80.dp).fillMaxHeight().background(Color.Black.copy(alpha = 0.2f))) {
-                    TransportControls(state, onStateChange, nativeLib)
+                    TransportControls(state, onStateChange, nativeLib, viewModel)
                 }
                 
                 // Vertical Navigation Tabs
@@ -1260,7 +998,7 @@ fun CreditItem(name: String, author: String, license: String, desc: String) {
 
 
 @Composable
-fun TransportControls(state: GrooveboxState, onStateChange: (GrooveboxState) -> Unit, nativeLib: NativeLib) {
+fun TransportControls(state: GrooveboxState, onStateChange: (GrooveboxState) -> Unit, nativeLib: NativeLib, viewModel: GrooveboxViewModel) {
     val latestState by rememberUpdatedState(state)
     val latestOnStateChange by rememberUpdatedState(onStateChange)
 
@@ -1335,9 +1073,11 @@ fun TransportControls(state: GrooveboxState, onStateChange: (GrooveboxState) -> 
                     .clickable {
                         val current = latestState
                         val newRec = !current.isRecording
-                        latestOnStateChange(current.copy(isRecording = newRec, isPlaying = if (newRec) true else current.isPlaying))
                         nativeLib.setIsRecording(newRec)
+                        if (!newRec) viewModel.drainRecordedSteps()
                         if (newRec) nativeLib.setPlaying(true)
+                        latestOnStateChange(viewModel.state.copy(isRecording = newRec,
+                            isPlaying = if (newRec) true else viewModel.state.isPlaying))
                     },
                 contentAlignment = Alignment.Center
             ) {
@@ -1353,8 +1093,10 @@ fun TransportControls(state: GrooveboxState, onStateChange: (GrooveboxState) -> 
                 onClick = { 
                     val current = latestState
                     val newPlaying = !current.isPlaying
-                    latestOnStateChange(current.copy(isPlaying = newPlaying))
                     nativeLib.setPlaying(newPlaying)
+                    if (!newPlaying) viewModel.drainRecordedSteps()
+                    latestOnStateChange(viewModel.state.copy(isPlaying = newPlaying,
+                        isRecording = newPlaying && viewModel.state.isRecording))
                 },
                 modifier = Modifier.size(if (isWideScreen) 34.dp else 44.dp).background(if (latestState.isPlaying) Color.Green.copy(alpha = 0.2f) else Color.DarkGray, RoundedCornerShape(22.dp))
             ) {
@@ -1376,10 +1118,10 @@ fun TransportControls(state: GrooveboxState, onStateChange: (GrooveboxState) -> 
                     .pointerInput(Unit) {
                         detectTapGestures(onPress = {
                             stopFlash = true
-                            val current = latestState
-                            latestOnStateChange(current.copy(isPlaying = false, isRecording = false))
                             nativeLib.setPlaying(false)
                             nativeLib.setIsRecording(false)
+                            viewModel.drainRecordedSteps()
+                            latestOnStateChange(viewModel.state.copy(isPlaying = false, isRecording = false))
                             nativeLib.panic()
                             try { awaitRelease() } finally { stopFlash = false }
                         })

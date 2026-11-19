@@ -42,7 +42,7 @@ bool AudioEngine::startLocked() {
     outBuilder.setSharingMode(oboe::SharingMode::Exclusive);
     outBuilder.setFormat(oboe::AudioFormat::Float);
     outBuilder.setChannelCount(2);
-    outBuilder.setSampleRate(deviceId > 0 ? 44100 : 48000);
+    outBuilder.setSampleRate(deviceId > 0 ? mCafaSampleRate.load() : 48000);
     if (deviceId > 0) {
         // OpenSL ES cannot reliably select/report a device. Do not allow that fallback.
         outBuilder.setAudioApi(oboe::AudioApi::AAudio);
@@ -145,15 +145,20 @@ void AudioEngine::stopLocked() {
 bool AudioEngine::cafaRouteMatches(oboe::AudioStream *stream) const {
     const int32_t expected = mCafaDeviceId.load();
     return expected > 0 && stream && stream->getAudioApi() == oboe::AudioApi::AAudio &&
-           stream->getDeviceId() == expected && stream->getSampleRate() == 44100 &&
+           stream->getDeviceId() == expected && stream->getSampleRate() == mCafaSampleRate.load() &&
            stream->getChannelCount() == 2 && stream->getFormat() == oboe::AudioFormat::Float;
 }
 
-bool AudioEngine::setCafaOutputDevice(int32_t deviceId) {
+bool AudioEngine::setCafaOutputDevice(int32_t deviceId, int32_t sampleRate) {
     std::lock_guard<std::mutex> lock(mStreamMutex);
     // Mute before closing/changing the route. No implicit re-enable after any restart.
     mCafaAudioEnabled.store(false);
     stopLocked();
+    if (deviceId > 0 && sampleRate != 44100 && sampleRate != 48000) {
+        mCafaDeviceId.store(0);
+        return false;
+    }
+    mCafaSampleRate.store(sampleRate);
     mCafaDeviceId.store(deviceId < 0 ? -1 : deviceId);
     if (!mStartRequested) return false;
     return startLocked();

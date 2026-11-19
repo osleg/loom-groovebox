@@ -141,7 +141,8 @@ fun MainScreen(
                                 state = state,
                                 onStateChange = viewModel::onStateChange,
                                 nativeLib = nativeLib,
-                                midiManager = midiManager
+                                midiManager = midiManager,
+                                stateForSave = { viewModel.drainRecordedSteps(); viewModel.state }
                             )
                         }
 
@@ -372,8 +373,10 @@ fun TransportControls(viewModel: com.groovebox.GrooveboxViewModel, nativeLib: Na
             IconButton(
                 onClick = { 
                     val newPlaying = !state.isPlaying
-                    viewModel.setPlaybackState(isPlaying = newPlaying, isRecording = state.isRecording)
                     nativeLib.setPlaying(newPlaying)
+                    if (!newPlaying) viewModel.drainRecordedSteps()
+                    viewModel.setPlaybackState(isPlaying = newPlaying,
+                        isRecording = newPlaying && viewModel.state.isRecording)
                 },
                 modifier = Modifier.size(if (isWideScreen) 34.dp else 44.dp).background(if (state.isPlaying) Color.Green.copy(alpha = 0.2f) else Color.DarkGray, androidx.compose.foundation.shape.RoundedCornerShape(22.dp))
             ) {

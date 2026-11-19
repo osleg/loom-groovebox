@@ -4,7 +4,7 @@ package com.groovebox.cafa
 import android.content.Context
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
-import android.media.midi.*
+import android.media.midi.MidiDeviceInfo
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -13,9 +13,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.groovebox.*
 import com.groovebox.persistence.PersistenceManager
-import java.security.SecureRandom
+import com.groovebox.presets.PresetApplier
+import org.fm1.companion.protocol.OpenMidiConnection
+import org.fm1.companion.protocol.Wire6
 
-/** Selected USB MIDI + selected USB audio only. Reconnect/normal-audio restoration are explicit. */
+/** Selected USB MIDI and an explicit phone or USB output. */
 class CafaConnection(context: Context, private val native: NativeLib,
                      private val model: GrooveboxViewModel,
                      private val ordinaryMidi: com.groovebox.midi.MidiManager) {
@@ -30,23 +32,22 @@ class CafaConnection(context: Context, private val native: NativeLib,
         }
     }
     private val preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-    private val main = Handler(Looper.getMainLooper())
-    private val midi = context.getSystemService(Context.MIDI_SERVICE) as? MidiManager
     private val audio = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-    private var device: MidiDevice? = null
-    private var input: MidiInputPort? = null
-    private var output: MidiOutputPort? = null
-    private var session: CafaSession? = null
-    private var generation = 0
     private var audioId = 0
-    private var midiId = -1
+    private var audioMode = Wire6.USB_RETURN
     private var closed = false
-    private var routeStart = 0L
+    private val main = Handler(Looper.getMainLooper())
+    private var pendingRoute: Runnable? = null
+    private val openTimeout = Runnable { disconnect("USB MIDI did not open. Reconnect explicitly.") }
+    private var lastRecordingReadback = 0L
+    private var ending = false
+    var onSessionEnded: (() -> Unit)? = null
+    var hasSession by mutableStateOf(false); private set
     var status by mutableStateOf(if (preferences.getBoolean(HELD, false)) "FM1 output remains muted. Reconnect or Restore normal audio." else "FM1 disconnected"); private set
     var connected by mutableStateOf(false); private set
     var routeHeld by mutableStateOf(preferences.getBoolean(HELD, false)); private set
     var notice by mutableStateOf(""); private set
-    val surface = CafaSurface({ model.state }, { model.onStateChange(it) }, object : CafaSurface.Engine {
+    val surface = NativeLoomSurface({ model.state }, { model.onStateChange(it) }, object : CafaSurface.Engine {
         override fun selectEngine(track: Int, type: EngineType) { native.setEngineType(track, type.ordinal) }
         override fun noteOn(track: Int, note: Int) { native.triggerNote(track, note, 100) }
         override fun noteOff(track: Int, note: Int) { native.releaseNote(track, note) }
@@ -56,12 +57,15 @@ class CafaConnection(context: Context, private val native: NativeLib,
         override fun volume(track: Int, value: Float) { native.setTrackVolume(track, value) }
         override fun pan(track: Int, value: Float) { native.setTrackPan(track, value) }
         override fun mute(track: Int, value: Boolean) { native.setTrackMute(track, value) }
+        override fun solo(track: Int, value: Boolean) { native.setTrackSolo(track, value) }
         override fun tempo(value: Float) { native.setTempo(value) }
         override fun length(track: Int, value: Int) { native.setSequencerConfig(track, 1, value) }
         override fun step(track: Int, index: Int, value: StepState) {
             native.setStep(track, index, value.active, value.notes.toIntArray(), value.velocity,
                 value.ratchet, value.punch, value.probability, value.gate, value.isSkipped,
-                value.subStepOffset, value.noteOffsets.toFloatArray(), value.noteVelocities.toFloatArray())
+                value.subStepOffset, value.noteOffsets.toFloatArray(), value.noteVelocities.toFloatArray(),
+                ((value.noteGates as Any?) as? List<Float> ?: emptyList()).toFloatArray(),
+                value.parameterLocks.keys.toIntArray(), value.parameterLocks.values.toFloatArray())
         }
         override fun playhead(track: Int, lane: Int) = native.getCurrentStep(track, lane)
         override fun lfo(index: Int, value: LfoState) {
@@ -81,109 +85,156 @@ class CafaConnection(context: Context, private val native: NativeLib,
         override fun swing(value: Float) { native.setSwing(value) }
         override fun humanize(track: Int, value: Float) { native.setTrackHumanize(track, value) }
         override fun lane(track: Int, value: Int) { native.setSelectedFmDrumInstrument(track, value) }
+        override fun chainEnabled(track: Int, enabled: Boolean) { native.setChainEnabled(track, enabled) }
+        override fun chainLength(track: Int, length: Int) { native.setChainLength(track, length) }
+        override fun chainSlot(track: Int, slot: Int, steps: Array<StepState>) {
+            native.setChainSlot(track, slot, 0, steps)
+        }
+        override fun scale(root: Int, intervals: IntArray) { native.setScaleConfig(root, intervals) }
+        override fun macro(index: Int, value: Float) { native.setMacroValue(index, value) }
+        override fun sidechain(track: Int, drum: Int) { native.setSidechainConfig(track, drum) }
+        override fun masterVolume(value: Float) { native.setMasterVolume(value) }
     }, { model.setSelectedTrack(it); native.setFocusedTrack(it) }, {
         // Snapshot only the phone's own project, never FM1 standalone data.
+        model.drainRecordedSteps()
         PersistenceManager.saveProject(model.state, "last_session.gbx")
-        notice = "Saved Loom's local last session."
-    }, { notice = it })
+    }, { model.sanitizeAndSetState(it) }, { notice = it }, { preset ->
+        PresetApplier.apply(preset, model.state.selectedTrackIndex, model.state,
+            model::onStateChange, native)
+    }, refreshRecordedState = model::drainRecordedSteps)
 
-    fun midiDevices(): List<MidiDeviceInfo> = midi?.devices?.filter {
-        it.type == MidiDeviceInfo.TYPE_USB && it.inputPortCount > 0 && it.outputPortCount > 0
-    } ?: emptyList()
+    fun midiDevices(): List<MidiDeviceInfo> = link.devices()
     fun audioDevices(): List<AudioDeviceInfo> = audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS).filter {
         it.type == AudioDeviceInfo.TYPE_USB_DEVICE || it.type == AudioDeviceInfo.TYPE_USB_HEADSET
     }
-    private val timer = object : Runnable {
-        override fun run() {
-            if (closed || session == null) return
-            if (midiDevices().none { it.id == midiId } || audioDevices().none { it.id == audioId }) {
-                disconnect("FM1 USB disconnected. Output muted; reconnect explicitly."); return
-            }
-            if (native.getCafaOutputDevice() != audioId) {
-                // AAudio requestStart is asynchronous. Permit bounded startup while
-                // still muted, but never tolerate a route loss after synchronization.
-                if (!connected && SystemClock.elapsedRealtime() - routeStart < 1000) {
-                    main.postDelayed(this, 34); return
-                }
-                disconnect("USB output route was lost. Output muted; reconnect explicitly."); return
-            }
-            if (connected && !native.isCafaAudioEnabled()) {
-                disconnect("USB output restarted or was muted. Reconnect to resynchronize."); return
-            }
-            try { session?.tick(SystemClock.elapsedRealtime()) }
-            catch (error: Exception) { disconnect("FM1 state failed safely: ${error.javaClass.simpleName}"); return }
-            if (session?.isOpen == true) main.postDelayed(this, 34)
+    fun phoneDevices(): List<AudioDeviceInfo> = audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS).filter {
+        it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER ||
+            it.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
+            it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET
+    }
+    private fun selectedDevices(mode: Int) = when (mode) {
+        Wire6.PHONE -> phoneDevices()
+        Wire6.USB_RETURN -> audioDevices()
+        else -> emptyList()
+    }
+    private fun selectedRate(info: AudioDeviceInfo, mode: Int): Int? {
+        if (info.channelCounts.isNotEmpty() && 2 !in info.channelCounts) return null
+        val rates = info.sampleRates
+        return when (mode) {
+            Wire6.USB_RETURN -> 44100.takeIf { rates.isEmpty() || it in rates }
+            Wire6.PHONE -> listOf(48000, 44100).firstOrNull { rates.isEmpty() || it in rates }
+            else -> null
         }
     }
-    fun connect(midiInfo: MidiDeviceInfo, audioInfo: AudioDeviceInfo) {
-        if (closed) return
-        disconnect("Opening selected FM1 endpoints…")
-        if (midiDevices().none { it.id == midiInfo.id } || audioDevices().none { it.id == audioInfo.id }) {
-            status = "Select available USB MIDI and USB audio outputs."; return
+    private val link = OpenMidiConnection(context, surface, object : OpenMidiConnection.Listener {
+        override fun beforeTick(now: Long): Boolean {
+            if (selectedDevices(audioMode).none { it.id == audioId }) {
+                disconnect("Selected audio output disconnected. Output muted; reconnect explicitly."); return false
+            }
+            if (native.getCafaOutputDevice() != audioId) {
+                disconnect("Selected output route was lost. Output muted; reconnect explicitly."); return false
+            }
+            if (connected && !native.isCafaAudioEnabled()) {
+                disconnect("Selected output restarted or was muted. Reconnect to resynchronize."); return false
+            }
+            // The same session updates recorded edits with or without a visible activity.
+            if (connected && native.getIsRecording() &&
+                now - lastRecordingReadback >= 100) {
+                model.drainRecordedSteps()
+                lastRecordingReadback = now
+            }
+            return true
         }
-        val token = ++generation
+        override fun opened() {
+            main.removeCallbacks(openTimeout)
+            status = "Waiting for FM1 native UI…"
+        }
+        override fun synchronizedDisplay(audioMode: Int, transportAccepted: Boolean) {
+            if (audioMode != this@CafaConnection.audioMode || native.getCafaOutputDevice() != audioId) {
+                disconnect("Output route verification failed. Output stays muted."); return
+            }
+            native.setCafaAudioEnabled(true)
+            if (!native.isCafaAudioEnabled()) { disconnect("Output could not be enabled. Output stays muted."); return }
+            connected = true
+            status = if (audioMode == Wire6.PHONE) "FM1 synchronized · Phone audio" else "FM1 synchronized · FM1 USB audio"
+        }
+        override fun stopped(reason: String) { if (hasSession) disconnect(reason) }
+    })
+    fun connect(midiId: Int, audioId: Int, audioMode: Int) {
+        if (closed) return
+        endSession("Opening selected FM1 endpoints…", notify = false)
+        hasSession = true
+        val midiInfo = midiDevices().firstOrNull { it.id == midiId }
+        val audioInfo = selectedDevices(audioMode).firstOrNull { it.id == audioId }
+        val rate = audioInfo?.let { selectedRate(it, audioMode) }
+        if (midiInfo == null || audioInfo == null || audioInfo.id <= 0 || rate == null) {
+            disconnect("Select available USB MIDI and a compatible audio output."); return
+        }
         // Commit the fail-closed choice before touching output, so process death
         // or activity recreation cannot silently restore the default speaker.
         if (!preferences.edit().putBoolean(HELD, true).commit()) {
-            status = "Could not save the safe output mode. FM1 connection was not started."; return
+            disconnect("Could not save the safe output mode. FM1 connection was not started."); return
         }
-        routeHeld = true; audioId = audioInfo.id; midiId = midiInfo.id
-        routeStart = SystemClock.elapsedRealtime()
+        routeHeld = true; this.audioId = audioInfo.id; this.audioMode = audioMode
         ordinaryMidi.reserveForCafa(midiInfo.id)
         native.setCafaAudioEnabled(false)
-        if (!native.setCafaOutputDevice(audioId)) {
-            disconnect("Android could not verify 44.1 kHz stereo on this USB output. Output stays muted."); return
+        if (!native.setCafaOutputDevice(audioId, rate)) {
+            disconnect("Android could not verify the selected stereo output at $rate Hz. Output stays muted."); return
         }
-        try { midi?.openDevice(midiInfo, { opened ->
-            if (token != generation || closed) { runCatching { opened?.close() }; return@openDevice }
-            try {
-            if (opened == null) { disconnect("Android could not open selected USB MIDI device."); return@openDevice }
-            device = opened
-            input = midiInfo.ports.firstOrNull { it.type == MidiDeviceInfo.PortInfo.TYPE_INPUT }?.let { opened.openInputPort(it.portNumber) }
-            output = midiInfo.ports.firstOrNull { it.type == MidiDeviceInfo.PortInfo.TYPE_OUTPUT }?.let { opened.openOutputPort(it.portNumber) }
-            if (input == null || output == null) { disconnect("Selected USB MIDI ports are unavailable."); return@openDevice }
-            val link = CafaSession(object : CafaSession.Host {
-                override fun send(bytes: ByteArray) { val port = input ?: error("MIDI port closed"); port.send(bytes, 0, bytes.size) }
-                override fun snapshot() = surface.snapshot()
-                override fun input(serial: Int, payload: ByteArray) = surface.input(serial, payload)
-                override fun reset() { surface.reset() }
-                override fun applied() {
-                    if (native.getCafaOutputDevice() != audioId) { disconnect("USB route verification failed. Output stays muted."); return }
-                    native.setCafaAudioEnabled(true); connected = true
-                    status = "FM1 synchronized · Loom 8 tracks · controls v5"
+        // AAudio requestStart can return before the route is usable. Only start
+        // MIDI negotiation once that exact route has started with muted output.
+        val deadline = SystemClock.elapsedRealtime() + 1000
+        val waitForRoute = object : Runnable {
+            override fun run() {
+                if (native.getCafaOutputDevice() == audioId) {
+                    pendingRoute = null
+                    main.postDelayed(openTimeout, 5000)
+                    openMidi(midiInfo, audioMode)
+                } else if (SystemClock.elapsedRealtime() >= deadline) {
+                    disconnect("Selected output did not start. Output stays muted.")
+                } else {
+                    main.postDelayed(this, 25)
                 }
-                override fun stopped(reason: String) { disconnect(reason) }
-            })
-            session = link
-            val decoder = Protocol.Decoder { frame -> main.post {
-                if (token == generation) try { session?.receive(frame, SystemClock.elapsedRealtime()) }
-                catch (error: Exception) { disconnect("FM1 input failed safely: ${error.javaClass.simpleName}") }
-            } }
-            output?.connect(object : MidiReceiver() {
-                override fun onSend(data: ByteArray, offset: Int, count: Int, timestamp: Long) { synchronized(decoder) { decoder.feed(data, offset, count) } }
-                override fun onFlush() { synchronized(decoder) { decoder.reset() } }
-            })
-            status = "Waiting for Loom CAFA v5 firmware…"
-            link.begin(1 + SecureRandom().nextInt(16383), SystemClock.elapsedRealtime())
-            main.postDelayed(timer, 34)
-            } catch (error: Exception) { disconnect("USB MIDI setup failed safely: ${error.javaClass.simpleName}") }
-        }, main) } catch (error: Exception) { disconnect("USB MIDI open failed: ${error.javaClass.simpleName}") }
+            }
+        }
+        pendingRoute = waitForRoute
+        waitForRoute.run()
+    }
+    private fun openMidi(midiInfo: MidiDeviceInfo, audioMode: Int) {
+        link.connect(midiInfo, "com.groovebox", audioMode,
+            Wire6.Capability(Wire6.INSTRUMENT, 1, 0, true),
+            Wire6.Capability(Wire6.TRANSPORT, 1, 0, true),
+            Wire6.Capability(Wire6.PARTS, 1, 0, true),
+            Wire6.Capability(Wire6.NATIVE_UI, 1, 0, true),
+            Wire6.Capability(Wire6.NATIVE_IDLE_KEEPALIVE, 1, 0, false),
+            Wire6.Capability(Wire6.NATIVE_DELTA, 1, 0, false))
     }
     fun disconnect(reason: String = "FM1 disconnected. Output remains muted until reconnect or Restore normal audio.") {
-        generation++; main.removeCallbacks(timer)
+        endSession(reason, notify = true)
+    }
+    private fun endSession(reason: String, notify: Boolean) {
+        if (ending) return
+        ending = true
+        pendingRoute?.let { main.removeCallbacks(it) }
+        pendingRoute = null
+        main.removeCallbacks(openTimeout)
+        val wasActive = hasSession
+        hasSession = false
         if (routeHeld) native.setCafaAudioEnabled(false)
         connected = false
-        val old = session; session = null; old?.close()
+        link.close()
         if (routeHeld) { surface.stop(); native.panic(); native.setCafaOutputDevice(0) }
-        runCatching { output?.close() }; runCatching { input?.close() }; runCatching { device?.close() }
-        output = null; input = null; device = null; status = reason
+        status = reason
         // Keep selected FM1 excluded from generic MIDI until user explicitly restores normal audio.
+        ending = false
+        if (notify && wasActive) onSessionEnded?.invoke()
     }
     fun restoreNormalAudio() {
-        disconnect("Normal Loom audio selected. Transport stopped.")
+        endSession("Normal Loom audio selected. Transport stopped.", notify = false)
         native.setCafaOutputDevice(-1); routeHeld = false
         preferences.edit().putBoolean(HELD, false).commit()
         ordinaryMidi.reserveForCafa(null)
+        onSessionEnded?.invoke()
     }
     fun close() { disconnect(); closed = true }
 }

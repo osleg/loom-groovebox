@@ -2,7 +2,7 @@ package com.groovebox
 
 expect class NativeLib() {
     /** CAFA-only route: positive Android device ID, 0 = disconnected/muted, -1 = normal audio. */
-    fun setCafaOutputDevice(deviceId: Int): Boolean
+    fun setCafaOutputDevice(deviceId: Int, sampleRate: Int = 44100): Boolean
     /** Verified actual running CAFA output device, or 0. */
     fun getCafaOutputDevice(): Int
     fun setCafaAudioEnabled(enabled: Boolean)
@@ -17,7 +17,7 @@ expect class NativeLib() {
     fun setPlaying(playing: Boolean)
     fun triggerNote(trackIndex: Int, note: Int, velocity: Int)
     fun releaseNote(trackIndex: Int, note: Int)
-    fun setStep(trackIndex: Int, stepIndex: Int, active: Boolean, notes: IntArray, velocity: Float, ratchet: Int, punch: Boolean, probability: Float, gate: Float, isSkipped: Boolean, subStepOffset: Float = 0.0f, noteOffsets: FloatArray? = null, noteVelocities: FloatArray? = null)
+    fun setStep(trackIndex: Int, stepIndex: Int, active: Boolean, notes: IntArray, velocity: Float, ratchet: Int, punch: Boolean, probability: Float, gate: Float, isSkipped: Boolean, subStepOffset: Float = 0.0f, noteOffsets: FloatArray? = null, noteVelocities: FloatArray? = null, noteGates: FloatArray? = null, lockParameterIds: IntArray? = null, lockParameterValues: FloatArray? = null)
     fun setSequencerConfig(trackIndex: Int, numPages: Int, stepsPerPage: Int)
     fun setRouting(destTrack: Int, sourceTrack: Int, source: Int, dest: Int, amount: Float, destParamId: Int = -1)
     fun setParameter(trackIndex: Int, parameterId: Int, value: Float)
@@ -52,6 +52,7 @@ expect class NativeLib() {
     fun getCurrentStep(trackIndex: Int, drumIndex: Int = -1): Int
     fun getStepActive(trackIndex: Int, stepIndex: Int, drumIndex: Int = -1): Boolean
     fun getStepNotes(trackIndex: Int, stepIndex: Int, drumIndex: Int = -1): IntArray
+    fun drainRecordedSteps(): FloatArray
     fun getStepVelocity(trackIndex: Int, stepIndex: Int, drumIndex: Int = -1): Float
     fun getStepSubStep(trackIndex: Int, stepIndex: Int, drumIndex: Int = -1): Float
     fun setArpConfig(trackIndex: Int, mode: Int, octaves: Int, inversion: Int, isLatched: Boolean, isMutated: Boolean, rhythms: Array<BooleanArray>, sequence: IntArray, gateLengths: FloatArray, probability: Float, weird: Float)
@@ -94,7 +95,9 @@ expect class NativeLib() {
     fun setArpStrum(trackIndex: Int, strum: Float)
     fun setClockMultiplier(trackIndex: Int, multiplier: Float)
     fun setFilterMode(trackIndex: Int, mode: Int)
+    /** Empty until the engine has published a snapshot after applying queued edits. */
     fun getAllTrackParameters(trackIndex: Int): FloatArray
+    /** Empty when no current snapshot is available; preserve model steps in that case. */
     fun getAllStepActiveStates(trackIndex: Int): BooleanArray
     fun getRecordedSampleData(trackIndex: Int, targetSampleRate: Float): FloatArray?
     fun setInputDevice(deviceId: Int)

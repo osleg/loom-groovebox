@@ -72,7 +72,9 @@ public:
                float gate = 1.0f, bool isSkipped = false,
                float subStepOffset = 0.0f,
                const std::vector<float> &noteOffsets = {},
-               const std::vector<float> &noteVelocities = {});
+               const std::vector<float> &noteVelocities = {},
+               const std::vector<float> &noteGates = {},
+               const std::map<int, float> *parameterLocks = nullptr);
   void setSequencerConfig(int trackIndex, int numPages, int stepsPerPage);
   // New helper for modulation without affecting UI state
   void updateEngineParameter(int trackIndex, int parameterId, float value,
@@ -140,7 +142,7 @@ public:
   void clearSequencer(int trackIndex);
   void setMasterVolume(float volume);
   bool getStepActive(int trackIndex, int stepIndex, int drumIndex = -1);
-  void getStepActiveStates(int trackIndex, bool *out, int maxSize);
+  bool getStepActiveStates(int trackIndex, bool *out, int maxSize);
   std::vector<Step> getSequencerSteps(int trackIndex);
   std::vector<float> getAllTrackParameters(int trackIndex); // New sync method
   void getFxSends(int trackIndex, float *dest);
@@ -152,6 +154,10 @@ public:
   std::vector<int> getStepNotes(int trackIndex, int stepIndex, int drumIndex = -1);
   float getStepVelocity(int trackIndex, int stepIndex, int drumIndex = -1);
   float getStepSubStep(int trackIndex, int stepIndex, int drumIndex = -1);
+  // Drain only sequencer cells changed by live recording. Each record is
+  // track, lane (-1 for melodic), step, active, shared gate, note count,
+  // followed by note, velocity, offset, and per-note gate for each note.
+  std::vector<float> drainRecordedSteps();
   uint64_t getActiveNoteMask(int trackIndex);
   void setPitchBend(int trackIndex, float semitones);
   void setPadMod(int trackIndex, float value);
@@ -298,6 +304,9 @@ private:
     float subStepOffset;               // For SET_STEP (Microtiming)
     std::vector<float> noteOffsets;    // For SET_STEP (Per-Note Microtiming)
     std::vector<float> noteVelocities; // For SET_STEP (Per-Note Velocity)
+    std::vector<float> noteGates;      // For SET_STEP (Per-Note Gate)
+    std::map<int, float> parameterLocks; // For SET_STEP (Exact locks)
+    bool hasParameterLocks = false;
     std::vector<Step> steps;           // For SET_CHAIN_SLOT
     int laneIndex;                     // For SET_CHAIN_SLOT (-1 for melodic)
   };
@@ -558,6 +567,9 @@ public:
   std::atomic<double> mSampleRate{48000.0};
   std::atomic<int> mSnapshotCounter{0};
   std::recursive_mutex mLock;
+  std::recursive_mutex mRecordedStepLock;
+  std::bitset<64> mRecordedStepDirty[8][17];
+  void markRecordedStepDirty(int trackIndex, int drumIndex, int stepIndex);
   void triggerNoteLocked(int trackIndex, int note, int velocity,
                          bool isSequencerTrigger = false, float gate = 0.95f,
                          bool punch = false, bool isArpTrigger = false);
@@ -666,6 +678,7 @@ public:
   
   UISnapshot mUISnapshot;
   std::mutex mSnapshotLock;
+  std::atomic<bool> mUISnapshotReady{false};
   std::recursive_mutex &getLock() { return mLock; }
   const std::vector<Track> &getTracks() const { return mTracks; }
 };

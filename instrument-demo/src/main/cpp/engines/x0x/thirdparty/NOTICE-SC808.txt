@@ -1,0 +1,30 @@
+The 808 rim-shot circuit in this port comes via 8W8 and X0X from the
+Sonic Pi sc808 synth designs, adapted by Sam Aaron from Yoshinosuke
+Horiuchi's SC-808. Sonic Pi's license identifies the sc808 adaptation
+as MIT and credits Horiuchi's published permission for free use.
+
+Sonic Pi license:
+https://github.com/sonic-pi-net/sonic-pi/blob/c857ff77618485a8da56c334dd05a496be63292c/LICENSE.md#synth-designs
+
+Sonic Pi sc808 design and original attribution:
+https://github.com/sonic-pi-net/sonic-pi/blob/c857ff77618485a8da56c334dd05a496be63292c/etc/synthdefs/designs/supercollider/sc808.scd
+
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a
+copy of this software and associated documentation files (the "Software"),
+to deal in the Software without restriction, including without limitation
+the rights to use, copy, modify, merge, publish, distribute, sublicense,
+and/or sell copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included
+in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.

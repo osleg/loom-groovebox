@@ -165,12 +165,11 @@ fun ParametersScreen(viewModel: com.groovebox.GrooveboxViewModel, trackIndex: In
                          nativeLib.restoreTrackPreset(trackIndex)
                          // Refresh State from Engine
                          val allParams = nativeLib.getAllTrackParameters(trackIndex)
-                         if (allParams.isNotEmpty()) {
-                             val paramMap = allParams.mapIndexed { idx, value -> idx to value }.toMap()
-                             onStateChange(state.copy(tracks = state.tracks.mapIndexed { i, t -> 
-                                if (i == trackIndex) t.copy(parameters = paramMap) else t 
-                             }))
-                         }
+                         val paramMap = if (allParams.isNotEmpty())
+                             allParams.mapIndexed { idx, value -> idx to value }.toMap() else track.parameters
+                         onStateChange(state.copy(tracks = state.tracks.mapIndexed { i, t ->
+                             if (i == trackIndex) t.copy(parameters = paramMap, fm1KnobBindings = null, fm1StepKnobBindings = null) else t
+                         }))
                     },
                     modifier = Modifier.size(width = buttonWidth, height = buttonHeight),
                     contentPadding = PaddingValues(0.dp),
@@ -2219,13 +2218,12 @@ fun FmParameters(state: GrooveboxState, trackIndex: Int, onStateChange: (Grooveb
                                         .clickable {
                                             nativeLib.loadFmPreset(trackIndex, preset.id)
                                             val allParams = nativeLib.getAllTrackParameters(trackIndex)
-                                            if (allParams.isNotEmpty()) {
-                                                val paramMap = allParams.mapIndexed { idx, value -> idx to value }.toMap()
-                                                val newState = state.copy(tracks = state.tracks.mapIndexed { idx, t -> 
-                                                    if (idx == trackIndex) t.copy(selectedFmPreset = preset.id, parameters = paramMap) else t 
-                                                })
-                                                onStateChange(newState)
-                                            }
+                                            val paramMap = if (allParams.isNotEmpty())
+                                                allParams.mapIndexed { idx, value -> idx to value }.toMap() else track.parameters
+                                            val newState = state.copy(tracks = state.tracks.mapIndexed { idx, t ->
+                                                if (idx == trackIndex) t.copy(selectedFmPreset = preset.id, parameters = paramMap, fm1KnobBindings = null, fm1StepKnobBindings = null) else t
+                                            })
+                                            onStateChange(newState)
                                             showPresetDrawer = false
                                         }
                                         .padding(4.dp),
@@ -2276,7 +2274,7 @@ fun FmParameters(state: GrooveboxState, trackIndex: Int, onStateChange: (Grooveb
                                                     val allParams = nativeLib.getAllTrackParameters(trackIndex)
                                                     val paramMap = if (allParams.isNotEmpty()) allParams.mapIndexed { idx, value -> idx to value }.toMap() else state.tracks[trackIndex].parameters
                                                     onStateChange(state.copy(tracks = state.tracks.mapIndexed { idx, t -> 
-                                                        if (idx == trackIndex) t.copy(selectedFmPreset = presetId, parameters = paramMap) else t 
+                                                        if (idx == trackIndex) t.copy(selectedFmPreset = presetId, parameters = paramMap, fm1KnobBindings = null, fm1StepKnobBindings = null) else t
                                                     }))
                                                     showPresetDrawer = false
                                                 },
@@ -2662,7 +2660,7 @@ fun SoundFontParameters(state: GrooveboxState, trackIndex: Int, onStateChange: (
                     nativeLib.loadSoundFont(trackIndex, path)
                     val fileName = File(path).name.removeSuffix(".sf2").removeSuffix(".sf3").removeSuffix(".SF2").removeSuffix(".SF3")
                     onStateChange(state.copy(tracks = state.tracks.mapIndexed { idx, t ->
-                        if (idx == trackIndex) t.copy(soundFontPath = path, soundFontPresetName = fileName, soundFontPresetIndex = 0) else t
+                        if (idx == trackIndex) t.copy(soundFontPath = path, soundFontPresetName = fileName, soundFontPresetIndex = 0, fm1KnobBindings = null, fm1StepKnobBindings = null) else t
                     }))
                     onRefresh()
                 } catch (e: Exception) {
@@ -2711,7 +2709,7 @@ fun SoundFontParameters(state: GrooveboxState, trackIndex: Int, onStateChange: (
                             val newIdx = if (currentIdx <= 0) presetCount - 1 else currentIdx - 1
                             nativeLib.setSoundFontPreset(trackIndex, newIdx)
                             val name = nativeLib.getSoundFontPresetName(trackIndex, newIdx)
-                            onStateChange(state.copy(tracks = state.tracks.mapIndexed { idx, t -> if (idx == trackIndex) t.copy(soundFontPresetIndex = newIdx, soundFontPresetName = name) else t }))
+                            onStateChange(state.copy(tracks = state.tracks.mapIndexed { idx, t -> if (idx == trackIndex) t.copy(soundFontPresetIndex = newIdx, soundFontPresetName = name, fm1KnobBindings = null, fm1StepKnobBindings = null) else t }))
                         },
                         modifier = Modifier.height(28.dp).width(28.dp),
                         contentPadding = PaddingValues(0.dp),
@@ -2728,7 +2726,7 @@ fun SoundFontParameters(state: GrooveboxState, trackIndex: Int, onStateChange: (
                             val newIdx = if (currentIdx >= presetCount - 1) 0 else currentIdx + 1
                             nativeLib.setSoundFontPreset(trackIndex, newIdx)
                             val name = nativeLib.getSoundFontPresetName(trackIndex, newIdx)
-                            onStateChange(state.copy(tracks = state.tracks.mapIndexed { idx, t -> if (idx == trackIndex) t.copy(soundFontPresetIndex = newIdx, soundFontPresetName = name) else t }))
+                            onStateChange(state.copy(tracks = state.tracks.mapIndexed { idx, t -> if (idx == trackIndex) t.copy(soundFontPresetIndex = newIdx, soundFontPresetName = name, fm1KnobBindings = null, fm1StepKnobBindings = null) else t }))
                         },
                         modifier = Modifier.height(28.dp).width(28.dp),
                         contentPadding = PaddingValues(0.dp),
@@ -2763,7 +2761,7 @@ fun SoundFontParameters(state: GrooveboxState, trackIndex: Int, onStateChange: (
                                     .border(1.dp, if (isSelected) Color.Magenta else Color.LightGray.copy(alpha=0.3f), RoundedCornerShape(4.dp))
                                     .clickable {
                                         nativeLib.setSoundFontPreset(trackIndex, i)
-                                        onStateChange(state.copy(tracks = state.tracks.mapIndexed { idx, t -> if (idx == trackIndex) t.copy(soundFontPresetIndex = i, soundFontPresetName = name) else t }))
+                                        onStateChange(state.copy(tracks = state.tracks.mapIndexed { idx, t -> if (idx == trackIndex) t.copy(soundFontPresetIndex = i, soundFontPresetName = name, fm1KnobBindings = null, fm1StepKnobBindings = null) else t }))
                                         showPresetMenu = false
                                     }
                                     .padding(8.dp),

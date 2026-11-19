@@ -1,0 +1,198 @@
+--- a/firmware/src/favorites.c
++++ b/firmware/src/favorites.c
+@@ -1,29 +1,34 @@
+ /* SPDX-License-Identifier: GPL-3.0-only
+  * Copyright (C) 2026 Leo Kuroshita (@kurogedelic), Hügelton Instruments */
+ #define FELUCCA_FAVORITES 1
+-/* Stable engine/preset references; fixed capacity independent of optional engines. */
++/* Stable engine IDs. Row 15 of the original table holds Skiff preferences. */
++#define FAVORITE_EXTRA_ENGINES 25u /* IDs 15..39, 256 presets each */
+ typedef struct {
+-    uint8_t factory[16][32]; /* engine 0..15, preset 0..255 */
++    uint8_t factory[16][32]; /* IDs 0..14; row 15 is preferences */
+     uint32_t user, filter;
++    uint8_t extra[FAVORITE_EXTRA_ENGINES][32];
+ } favorites_t;
+ static favorites_t favorites;
+ static int favorite_has(uint32_t engine, uint32_t preset)
+ {
+     if (engine == NENGINES)
+         return preset < UP_SLOTS && ((favorites.user >> preset) & 1u);
+-    return engine < NENGINES && engine < 16u && preset < 256u &&
+-        ((favorites.factory[engine][preset / 8u] >> (preset % 8u)) & 1u);
++    if (engine >= NENGINES || engine >= 15u + FAVORITE_EXTRA_ENGINES || preset >= 256u)
++        return 0;
++    return (((engine < 15u ? favorites.factory[engine] : favorites.extra[engine - 15u])[preset / 8u]
++             >> (preset % 8u)) & 1u);
+ }
+ static int favorite_set(uint32_t engine, uint32_t preset, int on)
+ {
+-    if (engine > NENGINES || (engine == NENGINES ? preset >= UP_SLOTS : engine >= 16u || preset >= 256u))
++    if (engine > NENGINES || (engine == NENGINES ? preset >= UP_SLOTS :
++        engine >= 15u + FAVORITE_EXTRA_ENGINES || preset >= 256u))
+         return 0;
+     if (favorite_has(engine, preset) == !!on) return 0;
+     if (engine == NENGINES) {
+         if (on) favorites.user |= 1u << preset;
+         else favorites.user &= ~(1u << preset);
+     } else {
+-        uint8_t *b = &favorites.factory[engine][preset / 8u];
++        uint8_t *b = &(engine < 15u ? favorites.factory[engine] : favorites.extra[engine - 15u])[preset / 8u];
+         if (on) *b |= (uint8_t)(1u << (preset % 8u));
+         else *b &= (uint8_t)~(1u << (preset % 8u));
+     }
+--- a/firmware/src/settings_persist.c
++++ b/firmware/src/settings_persist.c
+@@ -1,4 +1,5 @@
+ /* SPDX-License-Identifier: GPL-3.0-only */
++#include <stddef.h>
+ /* Shared PER4 layout: each feature updates only its own fields, preserving
+  * the other feature's saved preferences when either is built independently.
+  * PER1/PER2 are upstream; PER3 added bold; PER4 added favorites.
+@@ -48,9 +49,28 @@
+     uint8_t cpal_cols[22];                     /* THEME CUSTOM's colours (ui.c CPAL_COLS: favorites.factory[14][8..29]) */
+     uint8_t ml[30];                            /* MIDI LEARN's map (midi_learn.c ml_tab: favorites.factory[1][2..31]) */
+     uint8_t room[32];
++    /* SKS2 appends bounded favorites for stable engine IDs 15..39. The SKS1
++     * prefix above stays byte-for-byte readable. Storage checksums the whole
++     * object; this hash also rejects an invalid extension in direct imports. */
++    uint32_t ext_magic, ext_version, ext_hash;
++    uint8_t ext_fav[FAVORITE_EXTRA_ENGINES][32];
+ } sks_t;
+ #define SKS_MAGIC 0x534B5331u                  /* "SKS1" */
++#define SKS2_MAGIC 0x534B5332u                 /* "SKS2" */
++#define FAV2_MAGIC 0x46415632u                 /* "FAV2" */
++#define FAV2_VERSION 1u
++#define SKS1_SIZE offsetof(sks_t, ext_magic)
+ _Static_assert(sizeof(sks_skiff_t) == 32u && ENGI_DIGITAL == 1u, "SKS1: favorites.factory[15], MIDI LEARN in row 1");
++
++static uint32_t fav2_hash(const uint8_t (*rows)[32])
++{
++    uint32_t h = 2166136261u;
++    const uint8_t *b = (const uint8_t *)rows;
++    uint32_t i;
++    for (i = 0; i < sizeof favorites.extra; i++)
++        h = (h ^ b[i]) * 16777619u;
++    return h;
++}
+ 
+ /* Normalize in place; 1 = current, 2 = migrated, 0 = invalid. */
+ static int settings_import_per(persist_t *p, int n)
+@@ -109,7 +129,10 @@
+     settings_hold = (uint8_t)hold_from_stored(p->bold);
+     settings_leds = (uint8_t)leds_from_stored(p->zoom);
+ #ifdef FELUCCA_FAVORITES
+-    memcpy(&favorites, &p->favorites, sizeof favorites);
++    memcpy(favorites.factory, p->favorites.factory, sizeof favorites.factory);
++    favorites.user = p->favorites.user;
++    favorites.filter = p->favorites.filter;
++    memset(favorites.extra, 0, sizeof favorites.extra);
+     favorites.filter = favorites.filter == 1u;
+ #if defined(FM4_NPRESETS) && !FELUCCA_FM4 && FELUCCA_LEGACY
+     {   /* DIGITAL's starred presets (engine 1, retired) -> the FM6 presets that cover them (fm4_convert.c) */
+@@ -144,13 +167,17 @@
+     memcpy(s->cpal_cols, &ff[14][8], sizeof s->cpal_cols);
+     memcpy(s->ml, &ff[ENGI_DIGITAL][2], sizeof s->ml);
+ }
+-/* b, n bytes of a stored settings record: SKS1, or (before 2.0) PER4 (.. PER1 with FELUCCA_LEGACY). Normalized in place;
+- * 1 = current, 2 = migrated, 0 = invalid. An SKS1 is read as the PER4 it names (Skiff's: its mark), its room kept */
++/* b, n bytes of a stored settings record: SKS2, SKS1, or PER4. The SKS1
++ * prefix and all old preference fields keep their original offsets. */
+ static int settings_import(void *b, int n)
+ {
+     sks_t *s = (sks_t *)b;
+     persist_t p;
+-    if (n != (int)sizeof *s || s->magic != SKS_MAGIC)
++    int old = n == (int)SKS1_SIZE && s->magic == SKS_MAGIC;
++    int current = n == (int)sizeof *s && s->magic == SKS2_MAGIC &&
++        s->ext_magic == FAV2_MAGIC && s->ext_version == FAV2_VERSION &&
++        s->ext_hash == fav2_hash((const uint8_t (*)[32])s->ext_fav);
++    if (!old && !current)
+         return settings_import_per((persist_t *)b, n);
+     p.magic = PERSIST_MAGIC; p.palette = s->palette; p.lowcut = s->lowcut; p.zoom = s->zoom; p.bold = s->bold;
+     p.panel = s->panel;
+@@ -161,20 +188,31 @@
+     memcpy(&p.favorites.factory[ENGI_DIGITAL][2], s->ml, sizeof s->ml);
+     p.favorites.user = s->fav_user; p.favorites.filter = s->fav_filter;
+     (void)settings_import_per(&p, sizeof p);
++    if (current) memcpy(favorites.extra, s->ext_fav, sizeof favorites.extra);
+     s->palette = p.palette;
+     sks_pack(s, (const uint8_t (*)[32])p.favorites.factory, p.favorites.user, p.favorites.filter);
+-    return 1;
++    if (old) memset((uint8_t *)s + SKS1_SIZE, 0, sizeof *s - SKS1_SIZE);
++    s->magic = SKS2_MAGIC;
++    s->ext_magic = FAV2_MAGIC;
++    s->ext_version = FAV2_VERSION;
++    memcpy(s->ext_fav, favorites.extra, sizeof favorites.extra);
++    s->ext_hash = fav2_hash((const uint8_t (*)[32])s->ext_fav);
++    return current ? 1 : 2;
+ }
+ 
+ /* Start with the last imported/saved object, including fields owned by a
+  * feature absent from this build. No save-on-boot or extra flash writes. (2.0) An SKS1 */
+ static void settings_export(sks_t *s)
+ {
+-    s->magic = SKS_MAGIC;
++    s->magic = SKS2_MAGIC;
+     s->palette = palette_to_stored(settings.palette);
+     s->lowcut = settings.lowcut;
+     s->zoom = settings.zoom = leds_to_stored(settings.zoom, settings_leds);
+     s->panel = panel;
+     s->bold = hold_to_stored(s->bold, settings_hold);
+     sks_pack(s, (const uint8_t (*)[32])favorites.factory, favorites.user, favorites.filter);
+-}
++    s->ext_magic = FAV2_MAGIC;
++    s->ext_version = FAV2_VERSION;
++    memcpy(s->ext_fav, favorites.extra, sizeof favorites.extra);
++    s->ext_hash = fav2_hash((const uint8_t (*)[32])s->ext_fav);
++}
+--- a/firmware/src/project.c
++++ b/firmware/src/project.c
+@@ -1640,7 +1640,7 @@
+ #include "slice_store.c"                          /* SLICE's MAN slices, kept in the user slots */
+ #endif
+ #if FELUCCA_FLASH
+-static sks_t persist_saved;                     /* ((2.0) SKS1: what the flash holds, or would after a PER4 read) */
++static sks_t persist_saved;                     /* SKS2: includes the original settings and extended favorites */
+ static uint8_t persist_pending;                 /* 1 requested, 2 waiting after a flash error */
+ static uint32_t persist_retry_ms;
+ #endif
+@@ -1648,7 +1648,7 @@
+ static void persist_boot(void)                    /* before settings_init / panel_init */
+ {
+ #if FELUCCA_FLASH
+-    union { persist_t per; sks_t sks; } p;         /* ((2.0) SKS1, or a PER4 of before) */
++    union { persist_t per; sks_t sks; } p;         /* SKS2, SKS1, or a PER4 of before */
+     uint32_t f = irq_save();
+ #if BOARD_SMK37
+     flash_ok = FL_JEDEC_OK(FL_FAR(fl_jedec_ram)());      /* the SMK-37's part (or the FM-1's): fm1_flash_map.h */
+@@ -1678,7 +1678,7 @@
+     {
+         int n = st_load(OBJ_SETTINGS, &p, sizeof p);
+         if (settings_import(&p, n)) {
+-            if (p.sks.magic != SKS_MAGIC)              /* (a PER4: as SKS1, written at the next change) */
++            if (p.sks.magic != SKS2_MAGIC)             /* a PER4: written as SKS2 at the next change */
+                 memset(&p.sks, 0, sizeof p.sks);
+             persist_saved = p.sks;
+             settings_export(&persist_saved);
+--- a/firmware/src/editor_backup.c
++++ b/firmware/src/editor_backup.c
+@@ -145,11 +145,15 @@
+             return 0;
+         }
+         obj = OBJ_PROJECT0 + ed_bk_id - 2u;
+-    } else if (ed_bk_id == 1u) {                    /* ((2.0) SKS1; an archive of before's PER4 read, then written as SKS1) */
++    } else if (ed_bk_id == 1u) {                    /* SKS2, or an older SKS1/PER4 archive converted on restore */
+         const persist_t *p = (const persist_t *)raw;
+         const sks_t *s = (const sks_t *)raw;
+-        if (ed_bk_len == sizeof *s ? s->magic != SKS_MAGIC ||
+-                                     !ed_bk_set_ok(s->palette, s->lowcut, s->zoom, s->bold, s->fav_filter, &s->panel)
++        if (ed_bk_len == sizeof *s || ed_bk_len == SKS1_SIZE ?
++                                   (ed_bk_len == sizeof *s ? s->magic != SKS2_MAGIC ||
++                                       s->ext_magic != FAV2_MAGIC || s->ext_version != FAV2_VERSION ||
++                                       s->ext_hash != fav2_hash((const uint8_t (*)[32])s->ext_fav) :
++                                       s->magic != SKS_MAGIC) ||
++                                   !ed_bk_set_ok(s->palette, s->lowcut, s->zoom, s->bold, s->fav_filter, &s->panel)
+                                    : ed_bk_len != sizeof *p || p->magic != PERSIST_MAGIC ||
+                                      !ed_bk_set_ok(p->palette, p->lowcut, p->zoom, p->bold, p->favorites.filter, &p->panel))
+             return 2;

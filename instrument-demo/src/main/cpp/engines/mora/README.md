@@ -1,0 +1,5 @@
+# MORA formant voice
+
+The singing voice and mora table come from [Michael Perry's MIKU-FM1 at f413c98](https://github.com/MichaelAPerry/MIKU-FM1/tree/f413c98cafb5021002fb02e519a7593150706f0a), under GPL-3.0-only. `thirdparty/` includes the integer formant synthesizer, its generated resonator and excitation coefficients, and the 73-entry mora table in donor order. Only local include paths change in the donor code. The generic MORA instrument uses the synth code and generated parameters. The character art, branding, demo songs, arrangements and recordings are excluded.
+
+Select a syllable and one of five character sizes, or enable a second voice at a third, fourth, fifth or octave. **FRY**, **WHISPER**, **BREATH**, and **GLIDE** edit the original model's synthesis controls. Each held note keeps its onset syllable and supports independent playback pitches, with up to six notes per track. Skiff provides note entry, patterns, track and modulation state, and effects. The five bundled presets are original settings.

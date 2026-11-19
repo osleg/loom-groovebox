@@ -1,0 +1,264 @@
+--- a/firmware/src/core.h
++++ b/firmware/src/core.h
+@@ -95,8 +95,27 @@
+                                   * sounds (fm4_convert.c), settings PER1..PER3, 1.0's FM6 bank. Only the converter
+                                   * (web/conv) and its tests build them; 2.0 keeps such a record's bytes (OLD FORMAT) */
+ #endif
+-#define NENGINES 16u             /* Phone engine IDs append after stock Skiff IDs 0..14. */
++#define NENGINES 35u             /* Phone engine IDs append after stock Skiff IDs 0..14. */
+ #define ENGI_ATEK303 15u
++#define ENGI_FMINI 16u
++#define ENGI_808 17u
++#define ENGI_909 18u
++#define ENGI_YM2612 19u
++#define ENGI_SN76489 20u
++#define ENGI_SID 21u
++#define ENGI_ARP2600 22u
++#define ENGI_EMINENT 23u
++#define ENGI_KEYS 24u
++#define ENGI_FM106 25u
++#define ENGI_FIMBA 26u
++#define ENGI_MONK 27u
++#define ENGI_ESQ 28u
++#define ENGI_PROPHET 29u
++#define ENGI_CS1 30u
++#define ENGI_OBERVAVE 31u
++#define ENGI_SYNTHEX 32u
++#define ENGI_MACRO 33u
++#define ENGI_CZ1 34u
+ #define ENGI_DIGITAL 1u          /* reserved without FELUCCA_FM4: never selectable (eng_ok), its sounds load as FM6 */
+ #define ENGI_SLICE 13u           /* reserved without FELUCCA_SLICE, as DIGITAL is without FELUCCA_FM4 */
+ #define NENG_SHOWN (NENGINES - !FELUCCA_FM4 - !FELUCCA_SLICE)   /* the engines one can pick: PRESETS, the EDIT layer,
+@@ -397,6 +416,7 @@
+      * done() says so (once per control tick, before the render), not at the end of the ADSR's release */
+     uint8_t ownenv;
+     int (*done)(struct track *t, voice_t *v);
++    void (*post)(struct track *t, int32_t *out, uint32_t n);  /* shared part processing after voices */
+ } engine_t;
+ 
+ /* ------------------------------------------------- tracks, the song --- */
+--- a/firmware/src/engines.c
++++ b/firmware/src/engines.c
+@@ -28,6 +28,21 @@
+ #endif
+ 
+ #include "atek303/eng_atek303.c"
++#include "fmini/eng_fmini.c"
++#include "x0x/eng_x0x.c"
++#include "opn/eng_opn.c"
++#include "sid/eng_sid.c"
++#include "dock_analog/eng_dock_analog.c"
++#include "keys/eng_keys.c"
++#include "fm106/eng_fm106.c"
++#include "dock_modeled/eng_dock_modeled.c"
++#include "esq/eng_esq.c"
++#include "prophet/eng_prophet.c"
++#include "cs1/eng_cs1.c"
++#include "obervave/eng_obervave.c"
++#include "synthex/eng_synthex.c"
++#include "plaits/eng_plaits.c"
++#include "cz/eng_cz.c"
+ 
+ /* Skiff: a track runs one engine at a time, and an engine switch fades the old one out before the new one starts
+  * (voice.c engine_block), so a part's engines share one area, as big as the biggest's (PHYS: its 3 slots): ~48 KB for
+@@ -37,6 +52,23 @@
+ typedef union {
+     phys_slot_t phys[PHYS_POLY];
+     atek_part_t atek;
++    fmini_part_t fmini;
++    x0x_part_t x0x;
++    ym2612_part_t ym2612;
++    sn76489_part_t sn76489;
++    sid_part_t sid;
++    arp2600_part_t arp2600;
++    eminent_part_t eminent;
++    keys_part_t keys;
++    fm106_part_t fm106;
++    dock_modeled_part_t modeled;
++    esq_part_t esq;
++    prophet_part_t prophet;
++    cs1_part_t cs1;
++    obervave_part_t obervave;
++    synthex_part_t synthex;
++    plaits_part_t macro;
++    cz1_part_t cz1;
+     gr_part_t grain;
+     drum_lane_t drum[DV_NLANE];
+     drumx_lane_t drumx[DV_NLANE];
+@@ -51,6 +83,23 @@
+  * accessors give it none: a heavy engine forced there is silent); DRUM's lanes the biggest, 1.8 KB */
+ typedef union {
+     atek_part_t atek;
++    fmini_part_t fmini;
++    x0x_part_t x0x;
++    ym2612_part_t ym2612;
++    sn76489_part_t sn76489;
++    sid_part_t sid;
++    arp2600_part_t arp2600;
++    eminent_part_t eminent;
++    keys_part_t keys;
++    fm106_part_t fm106;
++    dock_modeled_part_t modeled;
++    esq_part_t esq;
++    prophet_part_t prophet;
++    cs1_part_t cs1;
++    obervave_part_t obervave;
++    synthex_part_t synthex;
++    plaits_part_t macro;
++    cz1_part_t cz1;
+     drum_lane_t drum[DV_NLANE];
+     drumx_lane_t drumx[DV_NLANE];
+     fm6_note_t fm6[FM6_POLY];
+@@ -100,6 +149,25 @@
+ #endif
+     &ENG_DRUMX,                  /* 14 (ENGI_DRUMX, Skiff) */
+     &ENG_ATEK303,                /* 15: app engine, stored in projects and presets */
++    &ENG_FMINI,
++    &ENG_808,
++    &ENG_909,
++    &ENG_YM2612,
++    &ENG_SN76489,
++    &ENG_SID,
++    &ENG_ARP2600,
++    &ENG_EMINENT,
++    &ENG_KEYS,
++    &ENG_FM106,
++    &ENG_FIMBA,
++    &ENG_MONK,
++    &ENG_ESQ,
++    &ENG_PROPHET,
++    &ENG_CS1,
++    &ENG_OBERVAVE,
++    &ENG_SYNTHEX,
++    &ENG_MACRO,
++    &ENG_CZ1,
+ };
+ 
+ /* a track's engine number as an index (the audio paths: a compare, cheaper than % NENGINES; a bad number: 0) */
+@@ -143,6 +211,25 @@
+     10,                          /* DRUM */
+     14,                          /* DRUM-X */
+     ENGI_ATEK303,
++    ENGI_FMINI,
++    ENGI_808,
++    ENGI_909,
++    ENGI_YM2612,
++    ENGI_SN76489,
++    ENGI_SID,
++    ENGI_ARP2600,
++    ENGI_EMINENT,
++    ENGI_KEYS,
++    ENGI_FM106,
++    ENGI_FIMBA,
++    ENGI_MONK,
++    ENGI_ESQ,
++    ENGI_PROPHET,
++    ENGI_CS1,
++    ENGI_OBERVAVE,
++    ENGI_SYNTHEX,
++    ENGI_MACRO,
++    ENGI_CZ1,
+ };
+ 
+ /* the engines one can pick (engine 1 only with FELUCCA_FM4), in ENGINE_ORDER: eng_ok(e), the n-th of them
+--- a/firmware/src/params.c
++++ b/firmware/src/params.c
+@@ -91,6 +91,7 @@
+                                              "-",
+ #endif
+                                              "DRUM-X", "ATEK303",
++    "FMINI", "808", "909", "YM2612", "SN76489", "SID", "ARP2600", "EMINENT", "KEYS", "FM-106", "FIMBA", "MONK", "ESQ", "PROPHET", "CS-1", "OBERVAVE", "SYNTHEX", "MACRO", "CZ-1",
+ };
+ 
+ #define PD(l, f, mn, mx, df) {l, 0, mn, mx, df, f, 0}
+--- a/firmware/src/fx.c
++++ b/firmware/src/fx.c
+@@ -925,8 +925,8 @@
+  * DIST / SLICER while it sounds or its tail runs. ENGINES[] order. An estimate: it only steers the split, the sound does
+  * not depend on it */
+ static uint16_t part_cost[NPART];                       /* the last block's, per track */
+-static const uint16_t ENG_VCOST[NENGINES] = {163, 0, 162, 67, 70, 174, 144, 143, 189, 309, 113, 134, 181, 129, 120, 360};
+-_Static_assert(NENGINES == 16, "ENG_VCOST: a cost per engine");
++static const uint16_t ENG_VCOST[NENGINES] = {163, 0, 162, 67, 70, 174, 144, 143, 189, 309, 113, 134, 181, 129, 120, 360, 255, 180, 180, 270, 130, 300, 340, 170, 410, 300, 190, 240, 300, 310, 255, 320, 300, 410, 280};
++_Static_assert(NENGINES == 35, "ENG_VCOST: a cost per engine");
+ #else
+ static int32_t send_c[CTL], send_d[CTL], send_e[CTL], send_r[CTL], wet[CTL], mix_l[CTL], mix_r[CTL];
+ #endif
+--- a/firmware/src/midi_control.c
++++ b/firmware/src/midi_control.c
+@@ -225,6 +225,25 @@
+     FELUCCA_SLICE ? 0x80 : 0x00,                      /* SLICE TONE */
+     0x30,                                             /* DRUM-X TONE */
+     0x23,                                             /* ATEK303 CUT, RES */
++    0x12,                                             /* FMINI */
++    0x20,                                             /* 808 */
++    0x20,                                             /* 909 */
++    0x32,                                             /* YM2612 */
++    0x80,                                             /* SN76489 */
++    0x67,                                             /* SID */
++    0x56,                                             /* ARP2600 */
++    0x00,                                             /* EMINENT */
++    0x10,                                             /* KEYS */
++    0x56,                                             /* FM106 */
++    0x42,                                             /* FIMBA */
++    0x12,                                             /* MONK */
++    0x67,                                             /* ESQ */
++    0x56,                                             /* PROPHET */
++    0x67,                                             /* CS1 */
++    0x56,                                             /* OBERVAVE */
++    0x67,                                             /* SYNTHEX */
++    0x34,                                             /* MACRO */
++    0x30,                                             /* CZ1 */
+ };
+ /* a CC sets parameter id of track t as a knob would: 0..127 over its range */
+ static void midi_cc_set(track_t *t, uint32_t id, uint32_t value)
+--- a/firmware/src/eng_drumx.c
++++ b/firmware/src/eng_drumx.c
+@@ -21,7 +21,7 @@
+ #include "drumx_voice.c"
+ 
+ /* engine e plays a kit (DRUM, DRUM-X): a drum track (seq.c drum_track), its kick the duck's source (duck.c) */
+-static inline int drum_engine(uint32_t e) { return e == ENGI_DRUM || e == ENGI_DRUMX; }
++static inline int drum_engine(uint32_t e) { return e == ENGI_DRUM || e == ENGI_DRUMX || e == ENGI_808 || e == ENGI_909; }
+ 
+ /* General MIDI notes 35..81 -> the lane (DV_*, as drum_lane gives it) and semitones from the lane's pitch: congas on
+  * TOM, claves on RIM, cymbals on BELL, each at its pitch from the lane's (JIANT's map) */
+--- a/firmware/src/eng_drum.c
++++ b/firmware/src/eng_drum.c
+@@ -121,6 +121,7 @@
+ static uint32_t drum_swaps(const track_t *t)
+ {
+     uint32_t kit = drum_kit_plays(t->p[P_E0]);
++    if (t->eng_req % NENGINES == ENGI_909) return 4u;
+     if (t->eng_req % NENGINES != ENGI_DRUM)          /* ((Skiff) DRUM-X: its E0 is MRPH, its lanes their own names) */
+         return 0u;
+     return kit >= DK_80 && kit < DK_USR1 ? DK_SWAP[kit - DK_80] : 0u;
+--- a/firmware/src/voice.c
++++ b/firmware/src/voice.c
+@@ -236,8 +236,9 @@
+ {
+     uint32_t i, np = trk_nvoice(t), best = np, low = np, nfree = 0;
+     int32_t bd = 0x7FFFFFFF;
+-    if (t->engine == ENGI_DRUM || t->engine == ENGI_DRUMX) {
+-        voice_t *v = t->engine == ENGI_DRUM ? drum_reuse(t, note) : drumx_reuse(t, note);
++    if (drum_engine(t->engine)) {
++        voice_t *v = t->engine == ENGI_DRUM ? drum_reuse(t, note) :
++                     t->engine == ENGI_DRUMX ? drumx_reuse(t, note) : x0x_reuse(t, note);
+         if (v)
+             return voice_reuse(t, v);
+     }
+@@ -978,6 +979,14 @@
+     }
+     if (t->spread_on)
+         spread_sum(out, sb, n);                         /* (out: every voice; spread_buf: the left ones) */
++    if (e->post && t->spread_on) {
++        int32_t dry[CTL];
++        for (i = 0; i < n; i++) dry[i] = out[i];
++        e->post(t, out, n);
++        /* Add the shared mono effect equally to both sides of the spread. */
++        for (i = 0; i < n; i++) sb[i] += (out[i] - dry[i]) / 2;
++    } else if (e->post)
++        e->post(t, out, n);
+     if (fade) {
+         for (i = 0; i < 8u; i++)
+             t->p[P_E0 + i] = pe_new[i];

@@ -1,5 +1,7 @@
 #include "AudioEngine.h"
 #include <jni.h>
+#include <cmath>
+#include <map>
 
 static AudioEngine *engine = nullptr;
 
@@ -50,11 +52,20 @@ extern "C" JNIEXPORT void JNICALL Java_com_groovebox_NativeLib_nSetStep(
     jboolean active, jintArray notes, jfloat velocity, jint ratchet,
     jboolean punch, jfloat probability, jfloat gate, jboolean is_skipped,
     jfloat sub_step_offset, jfloatArray note_offsets,
-    jfloatArray note_velocities) {
+    jfloatArray note_velocities, jfloatArray note_gates,
+    jintArray lock_parameter_ids, jfloatArray lock_parameter_values) {
   if (engine) {
     std::vector<int> noteVec;
     std::vector<float> offsetVec;
     std::vector<float> velVec;
+    std::vector<float> gateVec;
+    std::map<int, float> lockMap;
+    const bool hasLocks = lock_parameter_ids != nullptr && lock_parameter_values != nullptr;
+    if ((lock_parameter_ids == nullptr) != (lock_parameter_values == nullptr) ||
+        (hasLocks && env->GetArrayLength(lock_parameter_ids) != env->GetArrayLength(lock_parameter_values)))
+      return;
+    if (!std::isfinite(velocity) || !std::isfinite(probability) ||
+        !std::isfinite(gate) || !std::isfinite(sub_step_offset)) return;
     bool hasNotes = false;
 
     if (notes != nullptr) {
@@ -68,24 +79,66 @@ extern "C" JNIEXPORT void JNICALL Java_com_groovebox_NativeLib_nSetStep(
         env->ReleaseIntArrayElements(notes, elems, JNI_ABORT);
 
         // Parse Offsets
-        if (note_offsets != nullptr &&
-            env->GetArrayLength(note_offsets) >= cap) {
-          jfloat *offElems = env->GetFloatArrayElements(note_offsets, nullptr);
-          for (int i = 0; i < cap; ++i)
+        if (note_offsets != nullptr) {
+          if (env->GetArrayLength(note_offsets) > cap) return;
+          const jsize count = env->GetArrayLength(note_offsets);
+          jfloat *offElems = count ? env->GetFloatArrayElements(note_offsets, nullptr) : nullptr;
+          bool valid = true;
+          for (int i = 0; i < count; ++i) {
+            if (!std::isfinite(offElems[i]) || offElems[i] < 0.0f || offElems[i] > 1.0f) {
+              valid = false; break;
+            }
             offsetVec.push_back(offElems[i]);
-          env->ReleaseFloatArrayElements(note_offsets, offElems, JNI_ABORT);
+          }
+          if (count) env->ReleaseFloatArrayElements(note_offsets, offElems, JNI_ABORT);
+          if (!valid) return;
+        }
+
+        if (note_gates != nullptr) {
+          jsize gateCount = env->GetArrayLength(note_gates);
+          if (gateCount > cap) return;
+          jfloat *gates = gateCount ? env->GetFloatArrayElements(note_gates, nullptr) : nullptr;
+          for (int i = 0; i < gateCount; ++i) {
+            if (!std::isfinite(gates[i]) || gates[i] < 0.01f || gates[i] > 64.0f) {
+              env->ReleaseFloatArrayElements(note_gates, gates, JNI_ABORT);
+              return;
+            }
+            gateVec.push_back(gates[i]);
+          }
+          if (gateCount) env->ReleaseFloatArrayElements(note_gates, gates, JNI_ABORT);
         }
 
         // Parse Velocities
-        if (note_velocities != nullptr &&
-            env->GetArrayLength(note_velocities) >= cap) {
-          jfloat *velElems =
-              env->GetFloatArrayElements(note_velocities, nullptr);
-          for (int i = 0; i < cap; ++i)
+        if (note_velocities != nullptr) {
+          if (env->GetArrayLength(note_velocities) > cap) return;
+          const jsize count = env->GetArrayLength(note_velocities);
+          jfloat *velElems = count ? env->GetFloatArrayElements(note_velocities, nullptr) : nullptr;
+          bool valid = true;
+          for (int i = 0; i < count; ++i) {
+            if (!std::isfinite(velElems[i]) || velElems[i] < 0.0f || velElems[i] > 1.0f) {
+              valid = false; break;
+            }
             velVec.push_back(velElems[i]);
-          env->ReleaseFloatArrayElements(note_velocities, velElems, JNI_ABORT);
+          }
+          if (count) env->ReleaseFloatArrayElements(note_velocities, velElems, JNI_ABORT);
+          if (!valid) return;
         }
       }
+    }
+    if (hasLocks) {
+      const jsize count = env->GetArrayLength(lock_parameter_ids);
+      jint *ids = count ? env->GetIntArrayElements(lock_parameter_ids, nullptr) : nullptr;
+      jfloat *values = count ? env->GetFloatArrayElements(lock_parameter_values, nullptr) : nullptr;
+      bool valid = true;
+      for (int i = 0; i < count; ++i) {
+        if (ids[i] < 0 || ids[i] >= 2500 || !std::isfinite(values[i])) { valid = false; break; }
+        lockMap[ids[i]] = values[i];
+      }
+      if (count) {
+        env->ReleaseIntArrayElements(lock_parameter_ids, ids, JNI_ABORT);
+        env->ReleaseFloatArrayElements(lock_parameter_values, values, JNI_ABORT);
+      }
+      if (!valid) return;
     }
     // Safety: If no notes are provided, the step CANNOT be active.
     // This prevents "ghost notes" from empty triggers.
@@ -108,7 +161,8 @@ extern "C" JNIEXPORT void JNICALL Java_com_groovebox_NativeLib_nSetStep(
 
     engine->getCore().setStep(track_index, step_index, safeActive, noteVec, safeVelocity,
                     safeRatchet, punch, safeProb, safeGate, is_skipped,
-                    safeSubStep, offsetVec, velVec);
+                    safeSubStep, offsetVec, velVec, gateVec,
+                    hasLocks ? &lockMap : nullptr);
   }
 }
 
@@ -848,6 +902,7 @@ Java_com_groovebox_NativeLib_nGetAllTrackParameters(JNIEnv *env, jobject thiz,
                                                    jint track_index) {
   if (engine) {
     std::vector<float> params = engine->getCore().getAllTrackParameters(track_index);
+    if (params.empty()) return env->NewFloatArray(0);
     jfloatArray result = env->NewFloatArray(params.size());
     env->SetFloatArrayRegion(result, 0, params.size(), params.data());
     return result;
@@ -862,7 +917,8 @@ Java_com_groovebox_NativeLib_nGetAllStepActiveStates(JNIEnv *env, jobject thiz,
     // Optimized path: Direct boolean fetch
     const int MAX_STEPS = 64;
     bool states[MAX_STEPS] = {false};
-    engine->getCore().getStepActiveStates(track_index, states, MAX_STEPS);
+    if (!engine->getCore().getStepActiveStates(track_index, states, MAX_STEPS))
+      return env->NewBooleanArray(0);
 
     jbooleanArray result = env->NewBooleanArray(MAX_STEPS);
     jboolean temp[MAX_STEPS];
@@ -873,6 +929,16 @@ Java_com_groovebox_NativeLib_nGetAllStepActiveStates(JNIEnv *env, jobject thiz,
     return result;
   }
   return env->NewBooleanArray(0);
+}
+
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_com_groovebox_NativeLib_nDrainRecordedSteps(JNIEnv *env, jobject thiz) {
+  std::vector<float> changes;
+  if (engine) changes = engine->getCore().drainRecordedSteps();
+  jfloatArray result = env->NewFloatArray(changes.size());
+  if (result && !changes.empty())
+    env->SetFloatArrayRegion(result, 0, changes.size(), changes.data());
+  return result;
 }
 
 extern "C" JNIEXPORT void JNICALL Java_com_groovebox_NativeLib_nSetFilterMode(
@@ -1137,8 +1203,8 @@ Java_com_groovebox_NativeLib_nSetTrackProbability(JNIEnv *env, jobject thiz, jin
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_com_groovebox_NativeLib_nSetCafaOutputDevice(JNIEnv *, jobject, jint deviceId) {
-  return engine && engine->setCafaOutputDevice(deviceId) ? JNI_TRUE : JNI_FALSE;
+Java_com_groovebox_NativeLib_nSetCafaOutputDevice(JNIEnv *, jobject, jint deviceId, jint sampleRate) {
+  return engine && engine->setCafaOutputDevice(deviceId, sampleRate) ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jint JNICALL

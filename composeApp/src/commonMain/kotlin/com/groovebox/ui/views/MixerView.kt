@@ -102,9 +102,9 @@ fun MixerView(state: GrooveboxState, onStateChange: (GrooveboxState) -> Unit, na
                         onValueChangeOverride = { newVal ->
                             val engineIdx = (newVal * (engineTypes.size - 1).toFloat() + 0.5f).toInt().coerceIn(0, engineTypes.size - 1)
                             val newType = engineTypes[engineIdx]
-                            if (newType != latestState.tracks[i].engineType) {
+                            if (newType != latestState.tracks[i].engineType || latestState.tracks[i].catalogEntryId != null) {
                                 val newTracks = latestState.tracks.toMutableList()
-                                newTracks[i] = newTracks[i].copy(engineType = newType)
+                                newTracks[i] = newTracks[i].copy(engineType = newType, catalogEntryId = null, fm1KnobBindings = null, fm1StepKnobBindings = null)
                                 latestOnStateChange(latestState.copy(
                                     tracks = newTracks,
                                     focusedValue = "ENGINE: ${newType.name.replace("_", " ")}"

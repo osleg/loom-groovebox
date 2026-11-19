@@ -28,12 +28,16 @@ actual object PersistenceManager {
         return dir
     }
 
-    actual fun saveProject(state: GrooveboxState, fileName: String) {
-        try {
+    actual fun saveProject(state: GrooveboxState, fileName: String): Boolean {
+        return try {
             val name = if (fileName.endsWith(".gbx")) fileName else "$fileName.gbx"
             val file = File(getProjectsDir(), name)
             ObjectOutputStream(FileOutputStream(file)).use { it.writeObject(state) }
-        } catch (e: Exception) { e.printStackTrace() }
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
     }
 
     actual fun loadProject(fileName: String): GrooveboxState? {
@@ -50,6 +54,8 @@ actual object PersistenceManager {
     actual fun listProjects(): List<String> = getProjectsDir().listFiles { _, name -> name.endsWith(".gbx") }?.map { it.name } ?: emptyList()
 
     actual fun deleteProject(fileName: String): Boolean = File(getProjectsDir(), fileName).let { if (it.exists()) it.delete() else false }
+    actual fun renameProject(from: String, to: String): Boolean =
+        renameWithin(getProjectsDir(), from, to, ".gbx")
 
     actual fun copyProject(fileName: String): Boolean {
         try {
@@ -90,6 +96,21 @@ actual object PersistenceManager {
         return engineDir.listFiles { _, name -> name.endsWith(".gbp") }?.map { it.name.removeSuffix(".gbp") } ?: emptyList()
     }
 
+    private fun renameWithin(dir: File, from: String, to: String, extension: String): Boolean {
+        if (from.isBlank() || to.isBlank() || from.contains('/') || from.contains('\\') ||
+            to.contains('/') || to.contains('\\')) return false
+        val source = File(dir, from.removeSuffix(extension) + extension)
+        val target = File(dir, to.removeSuffix(extension) + extension)
+        return source.isFile && !target.exists() && source.renameTo(target)
+    }
+    actual fun deleteTrackPreset(engineType: EngineType, name: String): Boolean {
+        val file = File(File(File(getLoomFolder(), "Presets"), engineType.name),
+            name.removeSuffix(".gbp") + ".gbp")
+        return file.isFile && file.delete()
+    }
+    actual fun renameTrackPreset(engineType: EngineType, from: String, to: String): Boolean =
+        renameWithin(File(File(getLoomFolder(), "Presets"), engineType.name), from, to, ".gbp")
+
     actual fun saveSequence(trackState: TrackState, name: String) {
         try {
             val seqDir = File(getLoomFolder(), "Sequences")
@@ -105,6 +126,12 @@ actual object PersistenceManager {
             name.endsWith(".gbs") || name.endsWith(".mid") || name.endsWith(".midi") 
         }?.map { it.name.removeSuffix(".gbs") } ?: emptyList() // The suffix removal might need to be smarter if we want to show extensions in the list
     }
+    actual fun deleteSequence(name: String): Boolean {
+        val file = File(File(getLoomFolder(), "Sequences"), name.removeSuffix(".gbs") + ".gbs")
+        return file.isFile && file.delete()
+    }
+    actual fun renameSequence(from: String, to: String): Boolean =
+        renameWithin(File(getLoomFolder(), "Sequences"), from, to, ".gbs")
 
 
     actual fun loadSequence(targetTrack: TrackState, name: String): TrackState? {

@@ -63,7 +63,7 @@ fun getDefaultPadModTarget(engineType: EngineType): Int {
 fun sanitizeGrooveboxState(state: GrooveboxState): GrooveboxState {
     val sanitizedTracks = state.tracks.map { track ->
         val volCandidate = (track.volume as Any?) as? Float ?: 0.7f
-        val safeVol = if (volCandidate < 0.05f) 0.7f else volCandidate
+        val safeVol = if (volCandidate.isFinite()) volCandidate.coerceIn(0f, 2f) else 0.7f
         val newParams = ((track.parameters as Any?) as? Map<Int, Float> ?: emptyMap()).toMutableMap()
         
         // Ensure volume parameter matches
@@ -91,8 +91,8 @@ fun sanitizeGrooveboxState(state: GrooveboxState): GrooveboxState {
             isSoloed = (track.isSoloed as Any?) as? Boolean ?: false,
             isDisabled = (track.isDisabled as Any?) as? Boolean ?: false,
             transpose = (track.transpose as Any?) as? Int ?: 0,
-            steps = (track.steps as Any?) as? List<com.groovebox.StepState> ?: List(64) { com.groovebox.StepState() },
-            drumSteps = (track.drumSteps as Any?) as? List<List<com.groovebox.StepState>> ?: List(16) { List(64) { com.groovebox.StepState() } },
+            steps = ((track.steps as Any?) as? List<com.groovebox.StepState> ?: List(64) { com.groovebox.StepState() }).map { it.copy(noteGates = (it.noteGates as Any?) as? List<Float> ?: emptyList()) },
+            drumSteps = ((track.drumSteps as Any?) as? List<List<com.groovebox.StepState>> ?: List(16) { List(64) { com.groovebox.StepState() } }).map { lane -> lane.map { it.copy(noteGates = (it.noteGates as Any?) as? List<Float> ?: emptyList()) } },
             patternLength = (track.patternLength as Any?) as? Int ?: 16,
             numPages = (track.numPages as Any?) as? Int ?: 1,
             stepsPerPage = (track.stepsPerPage as Any?) as? Int ?: 16,
@@ -260,8 +260,8 @@ fun sanitizeGrooveboxState(state: GrooveboxState): GrooveboxState {
         polyPadMod = (state.polyPadMod as Any?) as? Boolean ?: true,
         lastMidiNote = (state.lastMidiNote as Any?) as? Int ?: -1,
         lastMidiVelocity = (state.lastMidiVelocity as Any?) as? Int ?: 0,
-        copiedSteps = (state.copiedSteps as Any?) as? List<com.groovebox.StepState>,
-        copiedDrumSteps = (state.copiedDrumSteps as Any?) as? List<List<com.groovebox.StepState>>,
+        copiedSteps = ((state.copiedSteps as Any?) as? List<com.groovebox.StepState>)?.map { it.copy(noteGates = (it.noteGates as Any?) as? List<Float> ?: emptyList()) },
+        copiedDrumSteps = ((state.copiedDrumSteps as Any?) as? List<List<com.groovebox.StepState>>)?.map { lane -> lane.map { it.copy(noteGates = (it.noteGates as Any?) as? List<Float> ?: emptyList()) } },
         gridMode = (state.gridMode as Any?) as? com.groovebox.GridMode ?: com.groovebox.GridMode.GRID_4X4,
         playLayout = (state.playLayout as Any?) as? com.groovebox.PlayLayout ?: com.groovebox.PlayLayout.GRID,
         padMode = (state.padMode as Any?) as? com.groovebox.PadMode ?: com.groovebox.PadMode.AUTO,
@@ -316,6 +316,8 @@ fun syncNativeState(state: GrooveboxState, nativeLib: NativeLib) {
         nativeLib.setTrackActive(trackIdx, if (t.isDisabled) false else t.isActive)
         nativeLib.setTrackDisabled(trackIdx, t.isDisabled)
         nativeLib.setTrackPan(trackIdx, t.pan)
+        nativeLib.setTrackMute(trackIdx, t.isMuted)
+        nativeLib.setTrackSolo(trackIdx, t.isSoloed)
         nativeLib.setSelectedFmDrumInstrument(trackIdx, t.selectedFmDrumInstrument)
         
         val macroIds = if (t.engineType == EngineType.SUBTRACTIVE) setOf(290, 291, 292) else emptySet()
@@ -369,23 +371,19 @@ fun syncNativeState(state: GrooveboxState, nativeLib: NativeLib) {
                          s.probability, 
                          s.gate,
                          s.isSkipped,
-                         s.subStepOffset
+                         s.subStepOffset,
+                         s.noteOffsets.toFloatArray(),
+                         s.noteVelocities.toFloatArray(),
+                         ((s.noteGates as Any?) as? List<Float> ?: emptyList()).toFloatArray(),
+                         s.parameterLocks.keys.toIntArray(), s.parameterLocks.values.toFloatArray()
                      )
-                     s.parameterLocks.forEach { (pid, valAmt) ->
-                         nativeLib.setParameterLock(trackIdx, stepIdx, pid, valAmt)
-                     }
                  }
              }
         } else {
              // Standard Tracks
              t.steps.forEachIndexed { stepIdx, s ->
                  val isActiveWithNotes = s.active && s.notes.isNotEmpty()
-                 nativeLib.setStep(trackIdx, stepIdx, isActiveWithNotes, s.notes.toIntArray(), s.velocity, s.ratchet, s.punch, s.probability, s.gate, s.isSkipped, s.subStepOffset)
-                 
-                 // SYNC P-LOCKS
-                 s.parameterLocks.forEach { (pid, valAmt) ->
-                     nativeLib.setParameterLock(trackIdx, stepIdx, pid, valAmt)
-                 }
+                 nativeLib.setStep(trackIdx, stepIdx, isActiveWithNotes, s.notes.toIntArray(), s.velocity, s.ratchet, s.punch, s.probability, s.gate, s.isSkipped, s.subStepOffset, s.noteOffsets.toFloatArray(), s.noteVelocities.toFloatArray(), ((s.noteGates as Any?) as? List<Float> ?: emptyList()).toFloatArray(), s.parameterLocks.keys.toIntArray(), s.parameterLocks.values.toFloatArray())
              }
         }
 
@@ -468,7 +466,7 @@ fun toggleStep(state: GrooveboxState, onStateChange: (GrooveboxState) -> Unit, n
         val newTracks = state.tracks.toMutableList()
         newTracks[trackIdx] = newTrack
         
-        nativeLib.setStep(trackIdx, stepIdx, newStep.active, newStep.notes.toIntArray(), newStep.velocity, newStep.ratchet, newStep.punch, newStep.probability, newStep.gate, newStep.isSkipped, newStep.subStepOffset)
+        nativeLib.setStep(trackIdx, stepIdx, newStep.active, newStep.notes.toIntArray(), newStep.velocity, newStep.ratchet, newStep.punch, newStep.probability, newStep.gate, newStep.isSkipped, newStep.subStepOffset, newStep.noteOffsets.toFloatArray(), newStep.noteVelocities.toFloatArray(), ((newStep.noteGates as Any?) as? List<Float> ?: emptyList()).toFloatArray(), newStep.parameterLocks.keys.toIntArray(), newStep.parameterLocks.values.toFloatArray())
         
         state.copy(tracks = newTracks)
     } else {
@@ -481,7 +479,7 @@ fun toggleStep(state: GrooveboxState, onStateChange: (GrooveboxState) -> Unit, n
         val newTracks = state.tracks.toMutableList()
         newTracks[trackIdx] = newTrack
         
-        nativeLib.setStep(trackIdx, stepIdx, newStep.active && newStep.notes.isNotEmpty(), newStep.notes.toIntArray(), newStep.velocity, newStep.ratchet, newStep.punch, newStep.probability, newStep.gate, newStep.isSkipped, newStep.subStepOffset)
+        nativeLib.setStep(trackIdx, stepIdx, newStep.active && newStep.notes.isNotEmpty(), newStep.notes.toIntArray(), newStep.velocity, newStep.ratchet, newStep.punch, newStep.probability, newStep.gate, newStep.isSkipped, newStep.subStepOffset, newStep.noteOffsets.toFloatArray(), newStep.noteVelocities.toFloatArray(), ((newStep.noteGates as Any?) as? List<Float> ?: emptyList()).toFloatArray(), newStep.parameterLocks.keys.toIntArray(), newStep.parameterLocks.values.toFloatArray())
         
         state.copy(tracks = newTracks)
     }

@@ -1627,9 +1627,9 @@ fun EngineSideSheet(
                                 modifier = Modifier
                                     .height(80.dp)
                                     .clickable {
-                                        if (!isSelected) {
+                                        if (!isSelected || track.catalogEntryId != null) {
                                             nativeLib.setEngineType(trackIndex, engine.ordinal)
-                                            val newTrack = track.copy(engineType = engine)
+                                            val newTrack = track.copy(engineType = engine, catalogEntryId = null, fm1KnobBindings = null, fm1StepKnobBindings = null)
                                             val newTracks = state.tracks.toMutableList()
                                             newTracks[trackIndex] = newTrack
                                             onStateChange(state.copy(tracks = newTracks))

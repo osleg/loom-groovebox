@@ -1,10 +1,10 @@
 package com.groovebox
 
 actual class NativeLib {
-    actual fun setCafaOutputDevice(deviceId: Int): Boolean = nSetCafaOutputDevice(deviceId)
+    actual fun setCafaOutputDevice(deviceId: Int, sampleRate: Int): Boolean = nSetCafaOutputDevice(deviceId, sampleRate)
     actual fun getCafaOutputDevice(): Int = nGetCafaOutputDevice()
     actual fun setCafaAudioEnabled(enabled: Boolean) = nSetCafaAudioEnabled(enabled)
-    private external fun nSetCafaOutputDevice(deviceId: Int): Boolean
+    private external fun nSetCafaOutputDevice(deviceId: Int, sampleRate: Int): Boolean
     private external fun nGetCafaOutputDevice(): Int
     private external fun nSetCafaAudioEnabled(enabled: Boolean)
     actual fun isCafaAudioEnabled(): Boolean = nIsCafaAudioEnabled()
@@ -19,8 +19,8 @@ actual class NativeLib {
     actual fun setPlaying(playing: Boolean) = nSetPlaying(playing)
     actual fun triggerNote(trackIndex: Int, note: Int, velocity: Int) = nTriggerNote(trackIndex, note, velocity)
     actual fun releaseNote(trackIndex: Int, note: Int) = nReleaseNote(trackIndex, note)
-    actual fun setStep(trackIndex: Int, stepIndex: Int, active: Boolean, notes: IntArray, velocity: Float, ratchet: Int, punch: Boolean, probability: Float, gate: Float, isSkipped: Boolean, subStepOffset: Float, noteOffsets: FloatArray?, noteVelocities: FloatArray?) = 
-        nSetStep(trackIndex, stepIndex, active, notes, velocity, ratchet, punch, probability, gate, isSkipped, subStepOffset, noteOffsets, noteVelocities)
+    actual fun setStep(trackIndex: Int, stepIndex: Int, active: Boolean, notes: IntArray, velocity: Float, ratchet: Int, punch: Boolean, probability: Float, gate: Float, isSkipped: Boolean, subStepOffset: Float, noteOffsets: FloatArray?, noteVelocities: FloatArray?, noteGates: FloatArray?, lockParameterIds: IntArray?, lockParameterValues: FloatArray?) =
+        nSetStep(trackIndex, stepIndex, active, notes, velocity, ratchet, punch, probability, gate, isSkipped, subStepOffset, noteOffsets, noteVelocities, noteGates, lockParameterIds, lockParameterValues)
     actual fun setSequencerConfig(trackIndex: Int, numPages: Int, stepsPerPage: Int) = nSetSequencerConfig(trackIndex, numPages, stepsPerPage)
     actual fun setRouting(destTrack: Int, sourceTrack: Int, source: Int, dest: Int, amount: Float, destParamId: Int) = nSetRouting(destTrack, sourceTrack, source, dest, amount, destParamId)
     actual fun setParameter(trackIndex: Int, parameterId: Int, value: Float) = nSetParameter(trackIndex, parameterId, value)
@@ -104,6 +104,7 @@ actual class NativeLib {
     actual fun setFilterMode(trackIndex: Int, mode: Int) = nSetFilterMode(trackIndex, mode)
     actual fun getAllTrackParameters(trackIndex: Int): FloatArray = nGetAllTrackParameters(trackIndex)
     actual fun getAllStepActiveStates(trackIndex: Int): BooleanArray = nGetAllStepActiveStates(trackIndex)
+    actual fun drainRecordedSteps(): FloatArray = nDrainRecordedSteps()
     actual fun getRecordedSampleData(trackIndex: Int, targetSampleRate: Float): FloatArray? = nGetRecordedSampleData(trackIndex, targetSampleRate)
     actual fun setInputDevice(deviceId: Int) = nSetInputDevice(deviceId)
     actual fun setRecordingLocked(locked: Boolean) = nSetRecordingLocked(locked)
@@ -140,7 +141,7 @@ actual class NativeLib {
     private external fun nSetPlaying(playing: Boolean)
     private external fun nTriggerNote(trackIndex: Int, note: Int, velocity: Int)
     private external fun nReleaseNote(trackIndex: Int, note: Int)
-    private external fun nSetStep(trackIndex: Int, stepIndex: Int, active: Boolean, notes: IntArray, velocity: Float, ratchet: Int, punch: Boolean, probability: Float, gate: Float, isSkipped: Boolean, subStepOffset: Float, noteOffsets: FloatArray?, noteVelocities: FloatArray?)
+    private external fun nSetStep(trackIndex: Int, stepIndex: Int, active: Boolean, notes: IntArray, velocity: Float, ratchet: Int, punch: Boolean, probability: Float, gate: Float, isSkipped: Boolean, subStepOffset: Float, noteOffsets: FloatArray?, noteVelocities: FloatArray?, noteGates: FloatArray?, lockParameterIds: IntArray?, lockParameterValues: FloatArray?)
     private external fun nSetSequencerConfig(trackIndex: Int, numPages: Int, stepsPerPage: Int)
     private external fun nSetRouting(destTrack: Int, sourceTrack: Int, source: Int, dest: Int, amount: Float, destParamId: Int)
     private external fun nSetParameter(trackIndex: Int, parameterId: Int, value: Float)
@@ -218,6 +219,7 @@ actual class NativeLib {
     private external fun nSetFilterMode(trackIndex: Int, mode: Int)
     private external fun nGetAllTrackParameters(trackIndex: Int): FloatArray
     private external fun nGetAllStepActiveStates(trackIndex: Int): BooleanArray
+    private external fun nDrainRecordedSteps(): FloatArray
     private external fun nGetRecordedSampleData(trackIndex: Int, targetSampleRate: Float): FloatArray?
     private external fun nSetInputDevice(deviceId: Int)
     private external fun nSetRecordingLocked(locked: Boolean)

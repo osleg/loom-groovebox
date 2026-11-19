@@ -65,12 +65,27 @@ data class ArpConfig(
     }
 }
 
+/** One sound parameter assigned to an FM1 hardware knob. */
+data class Fm1KnobBinding(
+    val parameterId: Int,
+    val label: String,
+    val defaultValue: Float = 0f
+) : java.io.Serializable {
+    fun isValid(): Boolean = parameterId >= 0 && label.isNotBlank() &&
+        defaultValue.isFinite() && defaultValue in 0f..1f
+
+    companion object {
+        private const val serialVersionUID = 1L
+    }
+}
+
 data class TrackState(
     val id: Int,
     val volume: Float = 0.25f,
     val pan: Float = 0.5f,
     val humanize: Float = 0.0f,
     val engineType: EngineType = EngineType.SUBTRACTIVE,
+    val catalogEntryId: String? = null,
     val isActive: Boolean = true,
     val isMuted: Boolean = false,
     val isSoloed: Boolean = false,
@@ -84,6 +99,10 @@ data class TrackState(
     val stepsPerPage: Int = 16,
     val selectedFmDrumInstrument: Int = 0,
     val selectedFmPreset: Int? = null,
+    /** Null selects the legacy SOUND banks; otherwise four slots, including optional holes. */
+    val fm1KnobBindings: List<Fm1KnobBinding?>? = null,
+    /** Null selects the declared step-lock defaults; otherwise four independent held-step slots. */
+    val fm1StepKnobBindings: List<Fm1KnobBinding?>? = null,
     val arpConfig: ArpConfig = ArpConfig(),
     val mutatedNotes: Map<Int, Int> = emptyMap(),
     val fmCarrierMask: Int = 1,
@@ -184,8 +203,12 @@ data class StepState(
     val subStepOffset: Float = 0.0f, // 0.0 to 1.0 (Microtiming - applied to ALL notes if noteOffsets is empty)
     val noteOffsets: List<Float> = emptyList(), // Per-note microtiming (matches notes array)
     val noteVelocities: List<Float> = emptyList(), // Per-note velocity (matches notes array)
+    val noteGates: List<Float> = emptyList(), // Per-note length in steps; empty uses the shared gate
     val parameterLocks: Map<Int, Float> = emptyMap() // parameterId -> value (max 4)
 ) : java.io.Serializable {
+    // Java serialization leaves fields added after an old save as null; constructor defaults do not run.
+    private fun readResolve(): Any = copy(noteGates = (noteGates as List<Float>?) ?: emptyList())
+
     companion object {
         private const val serialVersionUID = 1L
     }

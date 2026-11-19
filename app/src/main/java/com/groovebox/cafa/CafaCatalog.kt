@@ -2,18 +2,14 @@
 package com.groovebox.cafa
 
 import com.groovebox.*
-import kotlin.math.roundToInt
+import org.fm1.companion.control.ParameterDescriptor
 
 /** Phone-side registry. IDs, ranges, formatting and backend adapters never enter firmware. */
 class CafaCatalog {
     data class Control(val id: Int, val label: String, val fallback: Float = 0f,
         val minimum: Float = 0f, val maximum: Float = 1f, val step: Float = .01f,
         val choices: List<String> = emptyList(), val unit: String = "%") {
-        init { require(minimum.isFinite() && maximum.isFinite() && minimum < maximum && step.isFinite() && step > 0) }
-        fun value(t: TrackState) = (t.parameters[id] ?: fallback).takeIf { it.isFinite() }?.coerceIn(minimum, maximum) ?: minimum
-        fun normalized(t: TrackState) = ((value(t) - minimum) / (maximum - minimum) * 16383).roundToInt()
-        fun display(t: TrackState): String = if (choices.isNotEmpty()) choices[((value(t)-minimum)/(maximum-minimum)*(choices.size-1)).roundToInt()] else
-            if (unit == "%") "${((value(t)-minimum)/(maximum-minimum)*100).roundToInt()}%" else "${value(t)}$unit"
+        val descriptor = ParameterDescriptor(id.toString(), label, fallback, minimum, maximum, step, choices, unit)
     }
     data class Entry(val id: String, val name: String, val backend: EngineType,
         val controls: (GrooveboxState, TrackState) -> List<Control>,

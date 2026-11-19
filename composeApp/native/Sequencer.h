@@ -10,6 +10,7 @@ struct Step {
     int note = 60;
     float velocity = 0.8f;
     float subStepOffset = 0.0f; // 0.0 to 1.0 within the step
+    float gate = -1.0f; // Negative means use the shared step gate
   };
 
   bool active = false;
@@ -21,15 +22,17 @@ struct Step {
   float gate = 1.0f;                   // 1.0 = full step
   std::map<int, float> parameterLocks; // CC ID -> Locked Value
 
-  void addNote(int n, float vel = 0.8f, float offset = 0.0f) {
+  void addNote(int n, float vel = 0.8f, float offset = 0.0f,
+               float gate = -1.0f) {
     for (auto &existing : notes) {
       if (existing.note == n) {
         existing.velocity = vel;
         existing.subStepOffset = offset;
+        existing.gate = gate;
         return;
       }
     }
-    notes.push_back({n, vel, offset});
+    notes.push_back({n, vel, offset, gate});
     active = true;
   }
 

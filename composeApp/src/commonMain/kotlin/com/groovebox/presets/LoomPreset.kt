@@ -1,5 +1,6 @@
 package com.groovebox.presets
 
+import com.groovebox.Fm1KnobBinding
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -23,8 +24,26 @@ data class LoomPreset(
     val filterMode: Int? = null,
     val wavetableName: String? = null,
     /** Attribution / provenance, e.g. "Helm factory bank (CC-BY 4.0)". */
-    val source: String? = null
+    val source: String? = null,
+    /** Null preserves the legacy SOUND banks. A present list has four slots. */
+    val fm1KnobBindings: List<LoomFm1KnobBinding?>? = null,
+    /** Null uses the default controls while a step is held. */
+    val fm1StepKnobBindings: List<LoomFm1KnobBinding?>? = null
 )
+
+@Serializable
+data class LoomFm1KnobBinding(
+    val parameterId: Int,
+    val label: String,
+    val defaultValue: Float = 0f
+) {
+    fun toTrackBinding(): Fm1KnobBinding = Fm1KnobBinding(parameterId, label, defaultValue)
+
+    companion object {
+        fun fromTrackBinding(binding: Fm1KnobBinding): LoomFm1KnobBinding =
+            LoomFm1KnobBinding(binding.parameterId, binding.label, binding.defaultValue)
+    }
+}
 
 const val CURRENT_PRESET_SCHEMA = 1
 
@@ -93,7 +112,15 @@ object PresetCodec {
             author = author,
             parameters = params,
             filterMode = if (engine == PresetEngine.SUBTRACTIVE) track.filterMode else null,
-            wavetableName = if (engine == PresetEngine.WAVETABLE) track.activeWavetableName else null
+            wavetableName = if (engine == PresetEngine.WAVETABLE) track.activeWavetableName else null,
+            fm1KnobBindings = track.fm1KnobBindings?.let { bindings ->
+                List(4) { index -> bindings.getOrNull(index)?.takeIf { it.isValid() }
+                    ?.let(LoomFm1KnobBinding::fromTrackBinding) }
+            },
+            fm1StepKnobBindings = track.fm1StepKnobBindings?.let { bindings ->
+                List(4) { index -> bindings.getOrNull(index)?.takeIf { it.isValid() }
+                    ?.let(LoomFm1KnobBinding::fromTrackBinding) }
+            }
         )
     }
 }

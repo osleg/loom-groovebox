@@ -1,0 +1,191 @@
+--- a/firmware/src/eng_sample.c
++++ b/firmware/src/eng_sample.c
+@@ -90,6 +90,18 @@
+ #define SMP_USER_XIP(k) fm1_xip_ptr(SMP_USER_BASE + (k) * SMP_USER_SIZE)
+ #endif
+ static const uint8_t *smp_user_xip(uint32_t k) { return SMP_USER_XIP(k); }
++/* The Android host keeps factory audio and NOR in different objects. Use
++ * tagged offsets instead of truncating a difference between their addresses. */
++#define SMP_USER_OFFSET 0x80000000u
++#define SMP_OFFSET_BITS 17u
++#define SMP_OFFSET_MASK ((1u << SMP_OFFSET_BITS) - 1u)
++_Static_assert(SMP_USER_SIZE <= 1u << SMP_OFFSET_BITS, "encoded sample offsets fit");
++static inline uint8_t smp_data_byte(uint32_t off, uint32_t byte)
++{
++    if (off & SMP_USER_OFFSET)
++        return smp_user_xip((off >> SMP_OFFSET_BITS) & 3u)[(off & SMP_OFFSET_MASK) + byte];
++    return SMP_DATA[off + byte];
++}
+ #if FELUCCA_SLICE
+ static void slc_user_scan(uint32_t k, int valid);   /* eng_slice.c: SLICE's slice table of the slot */
+ #else
+@@ -110,7 +122,7 @@
+     slc_user_scan(k, 0);
+     if (SMP_USER_HAS(k) && h->magic == SMP_USER_MAGIC && h->version == 1 && h->nz && h->nz <= 16u &&
+         h->data_len <= SMP_USER_SIZE - SMP_USER_DATA) {
+-        base = (uint32_t)(uintptr_t)(smp_user_xip(k) + SMP_USER_DATA) - (uint32_t)(uintptr_t)SMP_DATA;
++        base = SMP_USER_OFFSET | (k << SMP_OFFSET_BITS) | SMP_USER_DATA;
+         for (nz = h->nz, i = 0; i < nz; i++) {
+             smp_zone_t *z = &zt[i];
+             *z = h->zone[i];
+@@ -178,7 +190,7 @@
+  * ((2.0, #35) SAMPLE's and DRUM's user kits') */
+ static inline void adpcm_next(const smp_zone_t *z, uint32_t *pos, int32_t *ps)
+ {
+-    uint32_t b = SMP_DATA[z->off + (*pos >> 1)];
++    uint32_t b = smp_data_byte(z->off, *pos >> 1);
+     uint32_t code = (*pos & 1u) ? (b >> 4) : (b & 15u);
+     int32_t step = IMA_STEP[(uint32_t)ps[1] <= 88u ? ps[1] : 88], vd = step >> 3;
+     if (code & 4u)
+--- a/firmware/src/eng_grain.c
++++ b/firmware/src/eng_grain.c
+@@ -114,7 +114,7 @@
+ /* one IMA ADPCM sample of zone z at index pos */
+ static inline int32_t gr_dec(const smp_zone_t *z, uint32_t pos, int32_t *pred, int32_t *idx)
+ {
+-    uint32_t b = SMP_DATA[z->off + (pos >> 1)], code = (pos & 1u) ? (b >> 4) : (b & 15u);
++    uint32_t b = smp_data_byte(z->off, pos >> 1), code = (pos & 1u) ? (b >> 4) : (b & 15u);
+     int32_t step = IMA_STEP[*idx], vd = step >> 3;
+     if (code & 4u)
+         vd += step;
+--- a/firmware/src/eng_slice.c
++++ b/firmware/src/eng_slice.c
+@@ -137,7 +137,7 @@
+         d->pred = 0;
+         d->idx = 0;
+     }
+-    b = SMP_DATA[g->off + (rel >> 1)];
++    b = smp_data_byte(g->off, rel >> 1);
+     code = (rel & 1u) ? (b >> 4) : (b & 15u);
+     step = IMA_STEP[d->idx];
+     vd = step >> 3;
+--- a/firmware/src/ui_graph.c
++++ b/firmware/src/ui_graph.c
+@@ -1223,7 +1223,7 @@
+     const smp_zone_t *z = sample_wave.zone;
+     if (!z || !z->n || sample_wave.ready) return;
+     for (i = 0; i < 512u && sample_wave.pos < z->n; i++) {
+-        uint32_t pos = sample_wave.pos, b = SMP_DATA[z->off + (pos >> 1)];
++        uint32_t pos = sample_wave.pos, b = smp_data_byte(z->off, pos >> 1);
+         uint32_t code = (pos & 1u) ? b >> 4 : b & 15u;
+         int32_t step = IMA_STEP[sample_wave.index], d = step >> 3;
+         if (code & 4u) d += step;
+--- a/firmware/src/params.c
++++ b/firmware/src/params.c
+@@ -91,7 +91,7 @@
+                                              "-",
+ #endif
+                                              "DRUM-X", "ATEK303",
+-    "FMINI", "808", "909", "YM2612", "SN76489", "SID", "ARP2600", "EMINENT", "KEYS", "FM-106", "FIMBA", "MONK", "ESQ", "PROPHET", "CS-1", "OBERVAVE", "SYNTHEX", "MACRO", "CZ-1",
++    "FMINI", "808", "909", "YM2612", "SN76489", "SID", "ARP2600", "EMINENT", "KEYS", "FM-106", "FIMBA", "MONK", "ESQ", "PROPHET", "CS-1", "OBERVAVE", "SYNTHEX", "MACRO", "CZ-1", "LOFI SMP", "CLOUD",
+ };
+ 
+ #define PD(l, f, mn, mx, df) {l, 0, mn, mx, df, f, 0}
+@@ -451,6 +451,15 @@
+         *unit = "st";
+         break;
+     case F_ENUM:
++        if (d->names == SMP_ALL_NAMES && v >= (int32_t)SMP_NSETS && v < (int32_t)SMP_NALL) {
++            char name[9];
++            smp_user_name((uint32_t)v - SMP_NSETS, name);
++            if (name[0]) {
++                str_cpy(val, name, 8);
++                *unit = SMP_ALL_NAMES[v];
++                break;
++            }
++        }
+         str_cpy(val, d->names[v < d->min ? d->min : v > d->max ? d->max : v], 8);   /* ((Skiff U4, V5) 7 letters: the
+                                                        * card falls to M, then S, where V is too wide) */
+         if (d->unit)
+--- a/firmware/src/core.h
++++ b/firmware/src/core.h
+@@ -95,7 +95,7 @@
+                                   * sounds (fm4_convert.c), settings PER1..PER3, 1.0's FM6 bank. Only the converter
+                                   * (web/conv) and its tests build them; 2.0 keeps such a record's bytes (OLD FORMAT) */
+ #endif
+-#define NENGINES 35u             /* Phone engine IDs append after stock Skiff IDs 0..14. */
++#define NENGINES 37u             /* Phone engine IDs append after stock Skiff IDs 0..14. */
+ #define ENGI_ATEK303 15u
+ #define ENGI_FMINI 16u
+ #define ENGI_808 17u
+@@ -116,6 +116,8 @@
+ #define ENGI_SYNTHEX 32u
+ #define ENGI_MACRO 33u
+ #define ENGI_CZ1 34u
++#define ENGI_LOFI_SMP 35u
++#define ENGI_CLOUD 36u
+ #define ENGI_DIGITAL 1u          /* reserved without FELUCCA_FM4: never selectable (eng_ok), its sounds load as FM6 */
+ #define ENGI_SLICE 13u           /* reserved without FELUCCA_SLICE, as DIGITAL is without FELUCCA_FM4 */
+ #define NENG_SHOWN (NENGINES - !FELUCCA_FM4 - !FELUCCA_SLICE)   /* the engines one can pick: PRESETS, the EDIT layer,
+--- a/firmware/src/engines.c
++++ b/firmware/src/engines.c
+@@ -43,6 +43,7 @@
+ #include "synthex/eng_synthex.c"
+ #include "plaits/eng_plaits.c"
+ #include "cz/eng_cz.c"
++#include "samplers/eng_samplers.c"
+ 
+ /* Skiff: a track runs one engine at a time, and an engine switch fades the old one out before the new one starts
+  * (voice.c engine_block), so a part's engines share one area, as big as the biggest's (PHYS: its 3 slots): ~48 KB for
+@@ -100,6 +101,7 @@
+     synthex_part_t synthex;
+     plaits_part_t macro;
+     cz1_part_t cz1;
++    gr_part_t grain;
+     drum_lane_t drum[DV_NLANE];
+     drumx_lane_t drumx[DV_NLANE];
+     fm6_note_t fm6[FM6_POLY];
+@@ -168,6 +170,8 @@
+     &ENG_SYNTHEX,
+     &ENG_MACRO,
+     &ENG_CZ1,
++    &ENG_LOFI_SMP,
++    &ENG_CLOUD,
+ };
+ 
+ /* a track's engine number as an index (the audio paths: a compare, cheaper than % NENGINES; a bad number: 0) */
+@@ -188,9 +192,9 @@
+         return slc_get(si) ? 0 : N_SLC_SRC[si];
+     }
+ #endif
+-    if (e != &ENG_SAMPLE && e != &ENG_GRAIN)
++    if (e != &ENG_SAMPLE && e != &ENG_GRAIN && e != &ENG_LOFI_SMP && e != &ENG_CLOUD)
+         return 0;
+-    *code = (e == &ENG_GRAIN ? 32u : 1u) + si % 32u;
++    *code = (e == &ENG_GRAIN || e == &ENG_CLOUD ? 32u : 1u) + si % 32u;
+     return smp_set_missing(si) ? SMP_ALL_NAMES[si] : 0;
+ }
+ 
+@@ -230,6 +234,8 @@
+     ENGI_SYNTHEX,
+     ENGI_MACRO,
+     ENGI_CZ1,
++    ENGI_LOFI_SMP,
++    ENGI_CLOUD,
+ };
+ 
+ /* the engines one can pick (engine 1 only with FELUCCA_FM4), in ENGINE_ORDER: eng_ok(e), the n-th of them
+--- a/firmware/src/fx.c
++++ b/firmware/src/fx.c
+@@ -925,8 +925,8 @@
+  * DIST / SLICER while it sounds or its tail runs. ENGINES[] order. An estimate: it only steers the split, the sound does
+  * not depend on it */
+ static uint16_t part_cost[NPART];                       /* the last block's, per track */
+-static const uint16_t ENG_VCOST[NENGINES] = {163, 0, 162, 67, 70, 174, 144, 143, 189, 309, 113, 134, 181, 129, 120, 360, 255, 180, 180, 270, 130, 300, 340, 170, 410, 300, 190, 240, 300, 310, 255, 320, 300, 410, 280};
+-_Static_assert(NENGINES == 35, "ENG_VCOST: a cost per engine");
++static const uint16_t ENG_VCOST[NENGINES] = {163, 0, 162, 67, 70, 174, 144, 143, 189, 309, 113, 134, 181, 129, 120, 360, 255, 180, 180, 270, 130, 300, 340, 170, 410, 300, 190, 240, 300, 310, 255, 320, 300, 410, 280, 220, 350};
++_Static_assert(NENGINES == 37, "ENG_VCOST: a cost per engine");
+ #else
+ static int32_t send_c[CTL], send_d[CTL], send_e[CTL], send_r[CTL], wet[CTL], mix_l[CTL], mix_r[CTL];
+ #endif
+--- a/firmware/src/midi_control.c
++++ b/firmware/src/midi_control.c
+@@ -244,6 +244,8 @@
+     0x67,                                             /* SYNTHEX */
+     0x34,                                             /* MACRO */
+     0x30,                                             /* CZ1 */
++    0x60,                                             /* LOFI SMP */
++    0x20,                                             /* CLOUD */
+ };
+ /* a CC sets parameter id of track t as a knob would: 0..127 over its range */
+ static void midi_cc_set(track_t *t, uint32_t id, uint32_t value)
