@@ -3,7 +3,14 @@
 #include "skiff_runtime.c"
 #include <assert.h>
 #include <stdio.h>
+#if __has_include("windjammer_marker_detector.h")
+#include "windjammer_marker_detector.h"
+#define skiff_marker_detector_t windjammer_marker_detector_t
+#define skiff_marker_reset windjammer_marker_reset
+#define skiff_marker_feed windjammer_marker_feed
+#else
 #include "skiff_marker_detector.h"
+#endif
 static uint8_t saved_a[sizeof nor], saved_b[sizeof nor];
 static int16_t marker_source[8u * 2048u], marker_48k[18000], marker_return[8u * 2048u];
 
